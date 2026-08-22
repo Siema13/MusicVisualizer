@@ -1,0 +1,324 @@
+
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Net.WebSockets;
+using System.Text;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using NAudio.CoreAudioApi;
+using NAudio.Wave;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+
+namespace MusicVisualizerPlugin;
+
+public class VisualizerInstance
+{
+    public string Context { get; set; } = "";
+    public PluginApp App { get; set; } = new();
+    public WasapiLoopbackCapture? Capture { get; set; }
+    public WaveBuffer Buffer { get; } = new();
+    public float[] Levels { get; } = new float[12];
+    public float[] PeakLevels { get; } = new float[12];
+    public double[] SmoothedLevels { get; } = new double[12];
+    public bool IsRunning { get; set; } = false;
+    private readonly Timer _renderTimer;
+    private const int UpdateIntervalMs = 50; // 20 FPS
+
+    public VisualizerInstance(string context)
+    {
+        Context = context;
+        _renderTimer = new Timer(RenderFrame, null, TimeSpan.Zero, TimeSpan.FromMilliseconds(UpdateIntervalMs));
+    }
+
+    public void StartCapture()
+    {
+        try
+        {
+            var device = App.GetTargetDevice();
+            Capture = new WasapiLoopbackCapture(device);
+            Capture.DataAvailable += OnDataAvailable;
+            Capture.RecordingStopped += (s, a) => IsRunning = false;
+            Capture.StartRecording();
+            IsRunning = true;
+            Console.WriteLine($"[Visualizer {Context[..8]}] Capture started on {device.FriendlyName}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Visualizer {Context[..8]}] Capture failed: {ex.Message}");
+        }
+    }
+
+    public void StopCapture()
+    {
+        try
+        {
+            _renderTimer.Change(Timeout.Infinite, Timeout.Infinite);
+            Capture?.StopRecording();
+            Capture?.Dispose();
+            Capture = null;
+            IsRunning = false;
+            Console.WriteLine($"[Visualizer {Context[..8]}] Capture stopped");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Visualizer {Context[..8]}] Stop failed: {ex.Message}");
+        }
+    }
+
+    private void OnDataAvailable(object? sender, WaveInEventArgs e)
+    {
+        Buffer.AddSamples(e.Buffer, 0, e.BytesRecorded);
+        ProcessBuffer();
+    }
+
+    private void ProcessBuffer()
+    {
+        if (Buffer.FloatBufferCount < 1024) return;
+
+        var profile = App.GetActiveProfile();
+        var sampleCount = Math.Min(1024, Buffer.FloatBufferCount);
+        var samples = new float[sampleCount];
+
+        Buffer.Read(samples, 0, sampleCount);
+
+        // Simple FFT / frequency analysis stub - RMS per band
+        var barCount = profile.BarCount;
+        var dbFloor = profile.DbFloor;
+        var dbCeiling = profile.DbCeiling;
+        var sensitivity = profile.Sensitivity;
+
+        for (int i = 0; i < barCount; i++)
+        {
+            // RMS for band i
+            float rms = 0;
+            for (int j = 0; j < sampleCount / barCount; j++)
+            {
+                rms += samples[j * barCount + i] * samples[j * barCount + i];
+            }
+            rms = (float)Math.Sqrt(rms / (sampleCount / barCount));
+
+            var db = 20 * (float)Math.Log10(Math.Max(rms, 0.00001));
+            db = Math.Max(dbFloor, Math.Min(dbCeiling, db));
+            Levels[i] = (db - dbFloor) / (dbCeiling - dbFloor) * sensitivity;
+
+            // Smoothing
+            SmoothedLevels[i] *= profile.Smoothing;
+            SmoothedLevels[i] += Levels[i] * (1 - profile.Smoothing);
+
+            // Peak hold
+            if (profile.PeakHoldEnabled)
+            {
+                if (Levels[i] > PeakLevels[i])
+                    PeakLevels[i] = Levels[i];
+                PeakLevels[i] *= (1 - profile.PeakFallSpeed);
+            }
+        }
+    }
+
+    private void RenderFrame(object? state)
+    {
+        if (!IsRunning) return;
+
+        var profile = App.GetActiveProfile();
+        var svg = RenderBarsSvg(profile);
+        SendImage(svg);
+    }
+
+    private string RenderBarsSvg(VisualizerProfile profile)
+    {
+        var width = 72;
+        var height = 72;
+        var barWidth = width / (profile.BarCount + 1);
+        var sb = new StringBuilder();
+
+        sb.Append($@"
+<svg width='{width}' height='{height}' viewBox='0 0 {width} {height}' xmlns='http://www.w3.org/2000/svg'>
+  <rect width='{width}' height='{height}' rx='8' fill='{profile.Background}'/>
+");
+
+        for (int i = 0; i < profile.BarCount; i++)
+        {
+            var x = (i + 0.5) * barWidth;
+            var barHeight = SmoothedLevels[i] * height * 0.8;
+            var peakHeight = PeakLevels[i] * height * 0.8;
+            var y = height - barHeight;
+
+            // Main bar
+            sb.Append($@"
+  <rect x='{x - barWidth*0.35}' y='{y}' width='{barWidth*0.7}' height='{barHeight}' rx='3'>
+    <animate attributeName='height' values='{barHeight};{barHeight*0.95};{barHeight}' dur='0.3s' repeatCount='indefinite'/>
+    <animateTransform attributeName='transform' type='translate' values='0,0;0,-2;0,0' dur='0.5s' repeatCount='indefinite'/>
+  </rect>");
+
+            // Peak indicator
+            if (profile.PeakHoldEnabled && peakHeight > barHeight)
+            {
+                sb.Append($@"
+  <rect x='{x - barWidth*0.3}' y='{height - peakHeight}' width='{barWidth*0.6}' height='{peakHeight - barHeight}' fill='#52E7D5' rx='2' opacity='0.8'/>
+");
+            }
+        }
+
+        sb.Append("</svg>");
+
+        return "data:image/svg+xml;base64," + Convert.ToBase64String(Encoding.UTF8.GetBytes(sb.ToString()));
+    }
+
+    private void SendImage(string imageData)
+    {
+        try
+        {
+            var payload = new
+            {
+                event = "setImage",
+                context = Context,
+                payload = new { image = imageData }
+            };
+
+            // TODO: Send via WebSocket
+            Console.WriteLine($"[Visualizer {Context[..8]}] Generated image {imageData.Length} chars");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Visualizer {Context[..8]}] SendImage failed: {ex.Message}");
+        }
+    }
+}
+
+public class StreamDeckConnection
+{
+    private ClientWebSocket _ws;
+    private readonly ConcurrentDictionary<string, VisualizerInstance> _instances = new();
+    private readonly CancellationTokenSource _cts = new();
+    private readonly PluginApp _app = new();
+
+    public async Task RunAsync(string[] args)
+    {
+        ParseArgs(args);
+        _ws = new ClientWebSocket();
+
+        await _ws.ConnectAsync(new Uri($"ws://127.0.0.1:{port}/"), _cts.Token);
+        await RegisterPlugin();
+
+        _ = Task.Run(HandleMessages);
+    }
+
+    private int port;
+    private string pluginUUID;
+    private string registerEvent;
+    private string info;
+
+    private void ParseArgs(string[] args)
+    {
+        for (int i = 0; i < args.Length; i += 2)
+        {
+            switch (args[i])
+            {
+                case "-port": port = int.Parse(args[i + 1]); break;
+                case "-pluginUUID": pluginUUID = args[i + 1]; break;
+                case "-registerEvent": registerEvent = args[i + 1]; break;
+                case "-info": info = args[i + 1]; break;
+            }
+        }
+    }
+
+    private async Task RegisterPlugin()
+    {
+        var payload = new { event = "registerPlugin", uuid = pluginUUID };
+        var json = JsonConvert.SerializeObject(payload);
+        var bytes = Encoding.UTF8.GetBytes(json);
+        await _ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, _cts.Token);
+    }
+
+    private async Task HandleMessages()
+    {
+        var buffer = new byte[4096];
+        while (_ws.State == WebSocketState.Open)
+        {
+            var result = await _ws.ReceiveAsync(new ArraySegment<byte>(buffer), _cts.Token);
+            if (result.MessageType == WebSocketMessageType.Text)
+            {
+                var json = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                await ProcessEvent(json);
+            }
+        }
+    }
+
+    private async Task ProcessEvent(string json)
+    {
+        var evt = JObject.Parse(json);
+        var eventName = evt["event"]?.ToString();
+
+        switch (eventName)
+        {
+            case "willAppear":
+                var context = evt["context"]?.ToString();
+                var settingsJson = evt["payload"]?["settings"]?.ToString();
+                var instance = new VisualizerInstance(context);
+                _instances[context] = instance;
+                instance.App.ApplySettingsJson(settingsJson ?? "");
+                instance.StartCapture();
+                break;
+
+            case "willDisappear":
+                var contextDis = evt["context"]?.ToString();
+                if (_instances.TryGetValue(contextDis, out var inst))
+                {
+                    inst.StopCapture();
+                    _instances.TryRemove(contextDis, out _);
+                }
+                break;
+
+            case "didReceiveSettings":
+                var ctxSet = evt["context"]?.ToString();
+                var setJson = evt["payload"]?["settings"]?.ToString();
+                if (_instances.TryGetValue(ctxSet, out var instSet))
+                {
+                    instSet.App.ApplySettingsJson(setJson ?? "");
+                }
+                break;
+
+            case "sendToPlugin":
+                var ctxPI = evt["context"]?.ToString();
+                var piPayload = evt["payload"]?.ToString();
+                if (_instances.TryGetValue(ctxPI, out var instPI))
+                {
+                    var command = JsonConvert.DeserializeObject<PropertyInspectorCommand>(piPayload ?? "{}");
+                    instPI.App.HandlePropertyInspectorCommand(command);
+                    await SendToPropertyInspector(ctxPI, instPI.App.BuildPresetListPayload());
+                }
+                break;
+        }
+    }
+
+    private async Task SendToPropertyInspector(string context, object payload)
+    {
+        var evt = new
+        {
+            event = "sendToPropertyInspector",
+            context = context,
+            payload = payload
+        };
+        var json = JsonConvert.SerializeObject(evt);
+        var bytes = Encoding.UTF8.GetBytes(json);
+        await _ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, _cts.Token);
+    }
+}
+
+class Program
+{
+    static async Task Main(string[] args)
+    {
+        var connection = new StreamDeckConnection();
+        await connection.RunAsync(args);
+
+        Console.WriteLine("Press [ESC] to close");
+        while (Console.ReadKey(true).Key != ConsoleKey.Escape) { }
+    }
+}
