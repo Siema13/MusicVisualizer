@@ -646,6 +646,8 @@ namespace MusicVisualizerLoopback
                             var updated = targetRuntime.QueueLongPressTransform(dst =>
                             {
                                 dst.RenderMode = src.RenderMode;
+                                dst.Orientation = src.Orientation;
+                                dst.AutoGainEnabled = src.AutoGainEnabled;
                                 dst.BgColor = src.BgColor;
                                 dst.GradientStops = src.GradientStops.Select(g => g.Clone()).ToList();
                                 dst.TopRadius = src.TopRadius;
@@ -1248,6 +1250,12 @@ namespace MusicVisualizerLoopback
             {
                 runtime.BeatPulseLevel = 0f;
                 runtime.BeatBassBaseline = 0f;
+            }
+
+            if (settings.RenderMode == "waterfall" && (anyActive || snapshot.HasSignal))
+            {
+                runtime.WaterfallTick++;
+                anyActive = true;
             }
 
             if (settings.RenderMode == "stereo" && (runtime.StereoLeft > 0f || runtime.StereoRight > 0f || runtime.StereoPeakLeft > 0f || runtime.StereoPeakRight > 0f))

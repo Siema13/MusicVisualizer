@@ -46,6 +46,11 @@ namespace MusicVisualizerLoopback
         public float StereoPeakRight { get; set; }
         public float BeatPulseLevel { get; set; }
         public float BeatBassBaseline { get; set; }
+        public double AgcOffsetDb { get; set; }
+        public byte[]? WaterfallHistory { get; set; }
+        public int WaterfallWidth { get; set; }
+        public int WaterfallHeight { get; set; }
+        public long WaterfallTick { get; set; }
         public bool IsIdleState { get; set; }
         public long LastSmoothedSnapshotVersion { get; set; } = -1;
 
@@ -204,6 +209,7 @@ namespace MusicVisualizerLoopback
             var hash = new HashCode();
             hash.Add(SettingsVersion);
             hash.Add(settings.RenderMode);
+            hash.Add(settings.Orientation);
             hash.Add(settings.SpanCount);
             hash.Add(settings.SpanIndex);
             hash.Add(settings.BarCount);
@@ -251,7 +257,12 @@ namespace MusicVisualizerLoopback
             float scale = renderHeight / 144f;
             double sum = 0.0;
 
-            if (settings.RenderMode == "waveform")
+            if (settings.RenderMode == "waterfall")
+            {
+                hash.Add(WaterfallTick);
+                sum = LastOverallLevel * actualBars;
+            }
+            else if (settings.RenderMode == "waveform")
             {
                 float midY = renderHeight * 0.5f;
                 int step = Math.Max(1, Waveform.Length / Math.Max(1, renderWidth));

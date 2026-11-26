@@ -17,7 +17,10 @@ namespace MusicVisualizerLoopback
             "dots",
             "vuMeter",
             "waveform",
-            "stereo"
+            "stereo",
+            "area",
+            "radial",
+            "waterfall"
         };
 
         public static readonly GradientStop[][] GradientPresets =
@@ -158,6 +161,7 @@ namespace MusicVisualizerLoopback
             settings.BgColor = NormalizeHex(settings.BgColor, "#08150e");
 
             settings.RenderMode = NormalizeRenderMode(settings.RenderMode);
+            settings.Orientation = NormalizeOrientation(settings.Orientation);
             settings.LongPressAction = NormalizeLongPressAction(settings.LongPressAction);
             settings.DotSpacing = Math.Clamp(settings.DotSpacing, 2, 10);
             settings.AutoPauseTimeoutSec = Math.Clamp(settings.AutoPauseTimeoutSec, 5, 120);
@@ -220,7 +224,22 @@ namespace MusicVisualizerLoopback
                 "ledSegments" => "ledSegments",
                 "waveform" => "waveform",
                 "stereo" => "stereo",
+                "area" => "area",
+                "radial" => "radial",
+                "waterfall" => "waterfall",
                 _ => "bars"
+            };
+        }
+
+        private static string NormalizeOrientation(string? orientation)
+        {
+            return orientation switch
+            {
+                "up" => "up",
+                "down" => "down",
+                "left" => "left",
+                "right" => "right",
+                _ => "up"
             };
         }
 
@@ -309,6 +328,9 @@ namespace MusicVisualizerLoopback
         [JsonPropertyName("noiseGateDb")]
         public double NoiseGateDb { get; set; } = -65.0;
 
+        [JsonPropertyName("autoGainEnabled")]
+        public bool AutoGainEnabled { get; set; } = false;
+
         [JsonPropertyName("attackSpeed")]
         public double AttackSpeed { get; set; } = 0.65;
 
@@ -346,6 +368,9 @@ namespace MusicVisualizerLoopback
 
         [JsonPropertyName("renderMode")]
         public string RenderMode { get; set; } = "bars";
+
+        [JsonPropertyName("orientation")]
+        public string Orientation { get; set; } = "up";
 
         [JsonPropertyName("longPressAction")]
         public string LongPressAction { get; set; } = "cycleRenderMode";
@@ -416,6 +441,7 @@ namespace MusicVisualizerLoopback
                 SlopeDbPerOct = SlopeDbPerOct,
                 Gamma = Gamma,
                 NoiseGateDb = NoiseGateDb,
+                AutoGainEnabled = AutoGainEnabled,
                 AttackSpeed = AttackSpeed,
                 ReleaseSpeed = ReleaseSpeed,
                 Smoothing = Smoothing,
@@ -427,6 +453,7 @@ namespace MusicVisualizerLoopback
                 GradientStops = GradientStops.Select(x => x.Clone()).ToList(),
                 Paused = Paused,
                 RenderMode = RenderMode,
+                Orientation = Orientation,
                 LongPressAction = LongPressAction,
                 DotSpacing = DotSpacing,
                 ShowNumericMeter = ShowNumericMeter,

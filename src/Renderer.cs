@@ -35,6 +35,7 @@ namespace MusicVisualizerLoopback
             public readonly MemoryStream Stream;
             public readonly MemoryStream ZlibStreamBuffer;
             public readonly byte[] IndexedScanlines;
+            public readonly byte[] RotateBuffer;
             public readonly int Width;
             public readonly int Height;
 
@@ -45,6 +46,7 @@ namespace MusicVisualizerLoopback
                 Stream = new MemoryStream(4096);
                 ZlibStreamBuffer = new MemoryStream(4096);
                 IndexedScanlines = new byte[(width + 1) * height];
+                RotateBuffer = new byte[(width + 1) * height];
             }
 
             public void Dispose()
@@ -91,7 +93,7 @@ namespace MusicVisualizerLoopback
                 RenderBeatPulseBackground(raw, width, height, runtime.BeatPulseLevel);
             }
 
-            // Render selected visualization mode (all 7 modes on zero-GC 8-bit indexed PNG path)
+            // Render selected visualization mode (all 10 modes on zero-GC 8-bit indexed PNG path)
             switch (settings.RenderMode)
             {
                 case "ledSegments":
@@ -112,9 +114,24 @@ namespace MusicVisualizerLoopback
                 case "stereo":
                     RenderIndexedStereo(raw, width, height, settings, runtime.StereoLeft, runtime.StereoRight, runtime.StereoPeakLeft, runtime.StereoPeakRight);
                     break;
+                case "area":
+                    RenderIndexedArea(raw, width, height, settings, runtime.Bars);
+                    break;
+                case "radial":
+                    RenderIndexedRadial(raw, width, height, settings, runtime.Bars);
+                    break;
+                case "waterfall":
+                    RenderIndexedWaterfall(raw, width, height, runtime);
+                    break;
                 default:
                     RenderIndexedBars(raw, width, height, settings, runtime.Bars, runtime.Peaks);
                     break;
+            }
+
+            // Apply orientation transform (down/left/right) BEFORE text/pause overlays so glyphs stay upright
+            if (settings.Orientation != "up")
+            {
+                ApplyOrientation(raw, scratch.RotateBuffer, width, height, settings.Orientation);
             }
 
             // Optional Idle / Pause glyph when paused or silent
@@ -604,6 +621,174 @@ namespace MusicVisualizerLoopback
 
             DrawChar5x7(raw, width, height, leftX0 + Math.Max(0, (barW - 5) / 2), labelY, 'L', IdxWhite);
             DrawChar5x7(raw, width, height, rightX0 + Math.Max(0, (barW - 5) / 2), labelY, 'R', IdxWhite);
+        }
+
+        private static void RenderIndexedArea(byte[] raw, int width, int height, VisualizerSettings settings, float[] bars)
+        {
+            int stride = width + 1;
+            int barCount = Math.Min(Math.Clamp(settings.BarCount, 2, 32), bars.Length);
+            if (barCount < 2) return;
+
+            byte fillIdx = (byte)(IdxPulseBase + 3);
+            int prevY = height - 1 - Math.Clamp((int)MathF.Round(Math.Clamp(bars[0], 0f, 1f) * (height - 2)), 0, height - 2);
+
+            for (int x = 0; x < width; x++)
+            {
+                float pos = (x / (float)Math.Max(1, width - 1)) * (barCount - 1);
+                int i0 = Math.Clamp((int)pos, 0, barCount - 1);
+                int i1 = Math.Min(barCount - 1, i0 + 1);
+                float frac = pos - i0;
+                float val = Math.Clamp(bars[i0] + (bars[i1] - bars[i0]) * frac, 0f, 1f);
+                int y = height - 1 - Math.Clamp((int)MathF.Round(val * (height - 2)), 0, height - 2);
+
+                // Vertical gradient fill from curve down to bottom
+                for (int fy = y; fy < height; fy++)
+                {
+                    raw[fy * stride + 1 + x] = (fy - y) < 3 ? GradientIndexForRow(fy, height) : fillIdx;
+                }
+
+                // Smooth bright top ridge connecting adjacent pixels
+                int yMin = Math.Min(prevY, y);
+                int yMax = Math.Max(prevY, y);
+                byte ridgeColor = GradientIndexForRow(yMin, height);
+                for (int ry = yMin; ry <= yMax; ry++)
+                {
+                    raw[ry * stride + 1 + x] = ridgeColor;
+                }
+                prevY = y;
+            }
+        }
+
+        private static void RenderIndexedRadial(byte[] raw, int width, int height, VisualizerSettings settings, float[] bars)
+        {
+            int barCount = Math.Min(Math.Clamp(settings.BarCount, 2, 32), bars.Length);
+            if (barCount == 0) return;
+
+            float cx = width * 0.5f;
+            float cy = height * 0.5f;
+            float maxR = Math.Min(width, height) * 0.47f;
+            float innerR = maxR * 0.34f;
+            float spanR = maxR - innerR;
+
+            // Subtle inner guide ring
+            for (int deg = 0; deg < 360; deg += 4)
+            {
+                double rad = deg * Math.PI / 180.0;
+                int px = Math.Clamp((int)MathF.Round(cx + (float)(Math.Cos(rad) * innerR)), 0, width - 1);
+                int py = Math.Clamp((int)MathF.Round(cy + (float)(Math.Sin(rad) * innerR)), 0, height - 1);
+                raw[py * (width + 1) + 1 + px] = IdxVuArc;
+            }
+
+            int lineRadius = barCount <= 16 ? 1 : 0;
+            for (int i = 0; i < barCount; i++)
+            {
+                float val = Math.Clamp(bars[i], 0f, 1f);
+                double angle = (i / (double)barCount) * Math.PI * 2.0 - Math.PI * 0.5;
+                float cos = (float)Math.Cos(angle);
+                float sin = (float)Math.Sin(angle);
+                float rEnd = innerR + Math.Max(1.5f, val * spanR);
+
+                int x0 = (int)MathF.Round(cx + cos * innerR);
+                int y0 = (int)MathF.Round(cy + sin * innerR);
+                int x1 = (int)MathF.Round(cx + cos * rEnd);
+                int y1 = (int)MathF.Round(cy + sin * rEnd);
+
+                byte colorIdx = GradientIndexForNormalized(val, height);
+                DrawThickLine(raw, width, height, x0, y0, x1, y1, lineRadius, colorIdx);
+            }
+        }
+
+        private static void RenderIndexedWaterfall(byte[] raw, int width, int height, ActionRuntime runtime)
+        {
+            if (runtime.WaterfallHistory == null || runtime.WaterfallWidth != width || runtime.WaterfallHeight != height)
+            {
+                runtime.WaterfallHistory = new byte[width * height];
+                runtime.WaterfallWidth = width;
+                runtime.WaterfallHeight = height;
+            }
+
+            byte[] hist = runtime.WaterfallHistory;
+            // Scroll history down by 1 row (zero allocation)
+            if (height > 1)
+            {
+                Buffer.BlockCopy(hist, 0, hist, width, width * (height - 1));
+            }
+
+            // Write newest spectrum slice into row 0
+            float[] bars = runtime.Bars;
+            int barCount = Math.Min(Math.Clamp(runtime.Settings.BarCount, 2, 32), bars.Length);
+            for (int x = 0; x < width; x++)
+            {
+                float val = 0f;
+                if (barCount > 1)
+                {
+                    float pos = (x / (float)Math.Max(1, width - 1)) * (barCount - 1);
+                    int i0 = Math.Clamp((int)pos, 0, barCount - 1);
+                    int i1 = Math.Min(barCount - 1, i0 + 1);
+                    float frac = pos - i0;
+                    val = Math.Clamp(bars[i0] + (bars[i1] - bars[i0]) * frac, 0f, 1f);
+                }
+
+                byte pixelIdx;
+                if (val <= 0.02f)
+                {
+                    pixelIdx = IdxBg;
+                }
+                else if (val < 0.25f)
+                {
+                    int pLevel = Math.Clamp((int)MathF.Round((val / 0.25f) * 7f), 1, 7);
+                    pixelIdx = (byte)(IdxPulseBase + pLevel);
+                }
+                else
+                {
+                    pixelIdx = GradientIndexForNormalized(val, height);
+                }
+
+                hist[x] = pixelIdx;
+            }
+
+            int stride = width + 1;
+            for (int y = 0; y < height; y++)
+            {
+                Buffer.BlockCopy(hist, y * width, raw, y * stride + 1, width);
+            }
+        }
+
+        private static void ApplyOrientation(byte[] raw, byte[] tmp, int width, int height, string orientation)
+        {
+            int stride = width + 1;
+            Buffer.BlockCopy(raw, 0, tmp, 0, raw.Length);
+
+            if (orientation == "down")
+            {
+                for (int y = 0; y < height; y++)
+                {
+                    Buffer.BlockCopy(tmp, (height - 1 - y) * stride + 1, raw, y * stride + 1, width);
+                }
+            }
+            else if (orientation == "right" && width == height)
+            {
+                for (int y = 0; y < height; y++)
+                {
+                    int srcRow = y * stride + 1;
+                    int dstCol = height - 1 - y;
+                    for (int x = 0; x < width; x++)
+                    {
+                        raw[x * stride + 1 + dstCol] = tmp[srcRow + x];
+                    }
+                }
+            }
+            else if (orientation == "left" && width == height)
+            {
+                for (int y = 0; y < height; y++)
+                {
+                    int srcRow = y * stride + 1;
+                    for (int x = 0; x < width; x++)
+                    {
+                        raw[(width - 1 - x) * stride + 1 + y] = tmp[srcRow + x];
+                    }
+                }
+            }
         }
 
         private static void DrawSingleStereoChannel(

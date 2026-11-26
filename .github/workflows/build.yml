@@ -1,0 +1,33 @@
+name: Build MusicVisualizer Plugin
+
+on:
+  push:
+    branches: [ Ambilight, main ]
+  pull_request:
+    branches: [ Ambilight, main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build and package plugin (Release)
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File .\build.ps1 -Package
+
+      - name: Upload .streamDeckPlugin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MusicVisualizerLoopback-plugin
+          path: dist/MusicVisualizerLoopback.streamDeckPlugin
+          if-no-files-found: error

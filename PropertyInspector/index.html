@@ -447,7 +447,7 @@
           <div class="card-sub">Styl wizualizacji i dodatkowe nakładki informacyjne.</div>
         </div>
         <div class="grid">
-          <div class="grid-4" id="renderModePills">
+          <div class="grid-5" id="renderModePills">
             <div class="pill" data-mode="bars">Bars</div>
             <div class="pill" data-mode="mirror">Mirror</div>
             <div class="pill" data-mode="dots">Dots</div>
@@ -455,6 +455,24 @@
             <div class="pill" data-mode="ledSegments">LED</div>
             <div class="pill" data-mode="waveform">Wave</div>
             <div class="pill" data-mode="stereo">Stereo</div>
+            <div class="pill" data-mode="area">Area</div>
+            <div class="pill" data-mode="radial">Radial</div>
+            <div class="pill" data-mode="waterfall">Water</div>
+          </div>
+
+          <div class="row">
+            <div class="label-wrap">
+              <span class="label">Orientacja</span>
+              <span class="help-icon" data-help="Kierunek rysowania wizualizera (Góra / Dół / Lewo / Prawo). Nakładki dB i pauzy zawsze pozostają w pionie.">?</span>
+            </div>
+            <div class="control">
+              <select id="orientation">
+                <option value="up">Góra (domyślna)</option>
+                <option value="down">Dół (odwrócona)</option>
+                <option value="right">Prawo (poziomo →)</option>
+                <option value="left">Lewo (poziomo ←)</option>
+              </select>
+            </div>
           </div>
 
           <div id="dotSpacingRow" class="row hidden">
@@ -610,6 +628,14 @@
             </div>
             <div class="control"><input id="noiseGateDb" type="range" min="-90" max="-20" step="1" value="-65"></div>
             <div id="noiseGateDbVal" class="value">-65 dB</div>
+          </div>
+
+          <div class="inline-check">
+            <span class="label-wrap" style="width:auto">
+              <span class="label">Auto-Gain (AGC ±12 dB)</span>
+              <span class="help-icon" data-help="Automatycznie i łagodnie dostosowuje czułość przy cichszych lub głośniejszych utworach.">?</span>
+            </span>
+            <span><input id="autoGainEnabled" type="checkbox"></span>
           </div>
 
           <details>

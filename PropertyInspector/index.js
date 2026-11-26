@@ -42,6 +42,7 @@ function defaults() {
     slopeDbPerOct: 4.0,
     gamma: 1.0,
     noiseGateDb: -65.0,
+    autoGainEnabled: false,
     attackSpeed: 0.65,
     releaseSpeed: 0.25,
     smoothing: 0.22,
@@ -53,6 +54,7 @@ function defaults() {
     gradientStops: cloneStops(GRADIENT_PRESETS[0].stops),
     paused: false,
     renderMode: "bars",
+    orientation: "up",
     longPressAction: "cycleRenderMode",
     dotSpacing: 3,
     showNumericMeter: false,
@@ -181,6 +183,7 @@ function normalizeSettings(input) {
   s.slopeDbPerOct = clampFloat(s.slopeDbPerOct, 0.0, 8.0, 4.0);
   s.gamma = clampFloat(s.gamma, 0.3, 4.0, 1.0);
   s.noiseGateDb = clampFloat(s.noiseGateDb, -90.0, -20.0, -65.0);
+  s.autoGainEnabled = !!s.autoGainEnabled;
 
   s.attackSpeed = clampFloat(s.attackSpeed, 0.01, 1.0, 0.65);
   s.releaseSpeed = clampFloat(s.releaseSpeed, 0.01, 1.0, 0.25);
@@ -192,8 +195,11 @@ function normalizeSettings(input) {
   s.bgColor = normalizeHex(s.bgColor, "#08150e");
   s.paused = !!s.paused;
 
-  if (!["bars", "vuMeter", "mirror", "dots", "ledSegments", "waveform", "stereo"].includes(s.renderMode)) {
+  if (!["bars", "vuMeter", "mirror", "dots", "ledSegments", "waveform", "stereo", "area", "radial", "waterfall"].includes(s.renderMode)) {
     s.renderMode = "bars";
+  }
+  if (!["up", "down", "left", "right"].includes(s.orientation)) {
+    s.orientation = "up";
   }
   if (!["cycleRenderMode", "cycleGradientPreset", "togglePause", "none"].includes(s.longPressAction)) {
     s.longPressAction = "cycleRenderMode";
@@ -234,6 +240,7 @@ function normalizeSettings(input) {
 function loadUiFromSettings(s) {
   setSelectValue("captureDeviceId", s.captureDeviceId);
   setSelectValue("longPressAction", s.longPressAction);
+  setSelectValue("orientation", s.orientation);
   setSelectValue("spanCount", String(s.spanCount));
   updateSpanIndexOptions(s.spanCount, s.spanIndex);
   toggleVisibility("spanIndexRow", s.spanCount > 1);
@@ -275,6 +282,7 @@ function loadUiFromSettings(s) {
   toggleVisibility("ledSegmentSizeRow", s.ledSegmentMode === "fixedSize");
 
   setCheckbox("peakHold", s.peakHold);
+  setCheckbox("autoGainEnabled", s.autoGainEnabled);
   setCheckbox("showNumericMeter", s.showNumericMeter);
   setCheckbox("beatPulseEnabled", s.beatPulseEnabled);
   setCheckbox("idleIconEnabled", s.idleIconEnabled);
@@ -437,6 +445,7 @@ function collectSettingsFromUi() {
     slopeDbPerOct: parseFloat(getValue("slopeDbPerOct", "4.0")),
     gamma: parseFloat(getValue("gamma", "1.0")),
     noiseGateDb: parseFloat(getValue("noiseGateDb", "-65.0")),
+    autoGainEnabled: !!document.getElementById("autoGainEnabled")?.checked,
     attackSpeed: parseFloat(getValue("attackSpeed", "0.65")),
     releaseSpeed: parseFloat(getValue("releaseSpeed", "0.25")),
     smoothing: parseFloat(getValue("smoothing", "0.22")),
@@ -447,6 +456,7 @@ function collectSettingsFromUi() {
     bgColor: getValue("bgColor", "#08150e"),
     paused: !!settings?.paused,
     renderMode: settings?.renderMode || "bars",
+    orientation: getValue("orientation", "up"),
     longPressAction: getValue("longPressAction", "cycleRenderMode"),
     dotSpacing: parseInt(getValue("dotSpacing", "3"), 10),
     showNumericMeter: !!document.getElementById("showNumericMeter")?.checked,
@@ -969,7 +979,7 @@ function initUi() {
   bindRange("ledLowThreshold", "ledLowThresholdVal", 2, "", false, previewSettings);
   bindRange("ledHighThreshold", "ledHighThresholdVal", 2, "", false, previewSettings);
 
-  ["captureDeviceId", "longPressAction", "spanIndex", "freqMin", "freqMax", "peakHold", "bgColor",
+  ["captureDeviceId", "longPressAction", "orientation", "autoGainEnabled", "spanIndex", "freqMin", "freqMax", "peakHold", "bgColor",
    "showNumericMeter", "beatPulseEnabled", "idleIconEnabled", "ledLowColor", "ledMidColor", "ledHighColor"
   ].forEach(id => bindSimpleChange(id, () => previewSettings()));
 

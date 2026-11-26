@@ -63,7 +63,7 @@ namespace MusicVisualizerLoopback
             double maxDb = 0.0;
             double dbRange = Math.Max(6.0, maxDb - minDb);
             double invDbRange = 1.0 / dbRange;
-            double gainDb = settings.GainDb;
+            double gainDb = settings.GainDb + (settings.AutoGainEnabled ? runtime.AgcOffsetDb : 0.0);
             double noiseGateDb = settings.NoiseGateDb;
             bool applyGamma = Math.Abs(settings.Gamma - 1.0) > 0.01;
             double invGamma = applyGamma ? 1.0 / Math.Max(0.1, settings.Gamma) : 1.0;
@@ -75,6 +75,7 @@ namespace MusicVisualizerLoopback
 
             float[] magnitudes = snapshot.Magnitudes;
             float[] smoothedBands = runtime.SmoothedBands;
+            double normSum = 0.0;
 
             for (int i = 0; i < barCount; i++)
             {
@@ -146,7 +147,32 @@ namespace MusicVisualizerLoopback
                     norm = Math.Pow(norm, invGamma);
                 }
 
-                output[i] = (float)Math.Clamp(norm, 0.0, 1.0);
+                float finalVal = (float)Math.Clamp(norm, 0.0, 1.0);
+                output[i] = finalVal;
+                normSum += finalVal;
+            }
+
+            // Optional Auto-Gain (AGC): gently nudges gain within +-12 dB to keep bars active on quiet/loud tracks
+            if (settings.AutoGainEnabled)
+            {
+                if (isNewSnapshot)
+                {
+                    double avgNorm = barCount > 0 ? normSum / barCount : 0.0;
+                    if (snapshot.HasSignal && avgNorm > 0.015)
+                    {
+                        double error = 0.48 - avgNorm;
+                        runtime.AgcOffsetDb = Math.Clamp(runtime.AgcOffsetDb + error * 0.45, -12.0, 12.0);
+                    }
+                    else if (!snapshot.HasSignal)
+                    {
+                        runtime.AgcOffsetDb *= 0.985;
+                        if (Math.Abs(runtime.AgcOffsetDb) < 0.05) runtime.AgcOffsetDb = 0.0;
+                    }
+                }
+            }
+            else
+            {
+                runtime.AgcOffsetDb = 0.0;
             }
         }
 
