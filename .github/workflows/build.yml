@@ -2,9 +2,9 @@ name: Build MusicVisualizer Plugin
 
 on:
   push:
-    branches: [ Ambilight, main ]
+    branches: [ Music-Visualizer, main ]
   pull_request:
-    branches: [ Ambilight, main ]
+    branches: [ Music-Visualizer, main ]
   workflow_dispatch:
 
 jobs:
