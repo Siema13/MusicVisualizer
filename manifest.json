@@ -1,0 +1,42 @@
+{
+  "Actions": [
+    {
+      "UUID": "com.musicvisualizer.loopback.visualizer",
+      "Name": "Music Visualizer",
+      "Tooltip": "System audio visualizer",
+      "Icon": "imgs/action-icon",
+      "PropertyInspectorPath": "propertyinspector/index.html",
+      "SupportedInMultiActions": false,
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/action-icon",
+          "TitleAlignment": "bottom",
+          "TitleColor": "#ffffff",
+          "FontSize": "9",
+          "ShowTitle": false
+        }
+      ]
+    }
+  ],
+  "Author": "MusicViz",
+  "CodePath": "plugin/MusicVisualizer.exe",
+  "Category": "Multimedia",
+  "CategoryIcon": "imgs/plugin-icon",
+  "Description": "Lightweight system audio visualizer using WASAPI loopback capture.",
+  "Icon": "imgs/plugin-icon",
+  "Name": "Music Visualizer Loopback",
+  "SDKVersion": 2,
+  "Software": {
+    "MinimumVersion": "5.0"
+  },
+  "OS": [
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
+    }
+  ],
+  "Version": "2.1.0"
+}

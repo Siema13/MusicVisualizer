@@ -1,0 +1,53 @@
+{
+  "captureDeviceId": "default",
+  "freqPreset": "custom",
+  "freqMin": 300,
+  "freqMax": 4000,
+  "barCount": 16,
+  "attackSpeed": 0.65,
+  "releaseSpeed": 0.25,
+  "smoothing": 0.22,
+  "peakHold": true,
+  "peakFallSpeed": 0.08,
+  "peakThickness": 2,
+  "topRadius": 2,
+  "bgColor": "#07070f",
+  "gradientStops": [
+    {
+      "pos": 0.0,
+      "color": "#00e5ff"
+    },
+    {
+      "pos": 0.5,
+      "color": "#00ff88"
+    },
+    {
+      "pos": 1.0,
+      "color": "#ff1744"
+    }
+  ],
+  "paused": false,
+  "normFloorAttack": 0.08,
+  "normFloorRelease": 0.999,
+  "normMinRange": 0.0008,
+  "normHeadroom": 0.92,
+  "normGamma": 1.0,
+  "normGateThreshold": 0.02,
+  "normResetOnDeviceChange": true,
+  "normPerBarIndependent": true,
+  "normHistoryWindowMs": 300,
+  "renderMode": "bars",
+  "dotSpacing": 3,
+  "showNumericMeter": false,
+  "autoPauseEnabled": false,
+  "autoPauseTimeoutSec": 30,
+  "ledSegmentMode": "fixedCount",
+  "ledSegmentCount": 14,
+  "ledSegmentSizePx": 8,
+  "ledSegmentGapPx": 2,
+  "ledLowColor": "#00ff00",
+  "ledMidColor": "#7fff00",
+  "ledHighColor": "#ff0000",
+  "ledLowThreshold": 0.5,
+  "ledHighThreshold": 0.85
+}

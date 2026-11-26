@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<title>MusicVisualizer Inspector</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #08150e;
+    color: #ebebeb;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    font-size: 12px;
+  }
+  body { padding: 0; user-select: none; }
+  .app { display: flex; flex-direction: column; }
+
+  /* ---------- Tabs ---------- */
+  .tabs-bar {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 4px;
+    background: #050d09;
+    border-bottom: 1px solid #154320;
+    padding: 8px 8px 6px 8px;
+  }
+  .tab-btn {
+    background: #0d1e14;
+    color: #8fa896;
+    border: 1px solid #154320;
+    border-radius: 6px;
+    padding: 7px 2px;
+    font-size: 10.5px;
+    font-weight: 600;
+    text-align: center;
+    cursor: pointer;
+    line-height: 1.15;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tab-btn:hover { background: #132a1c; color: #ebebeb; }
+  .tab-btn.active {
+    background: #154320;
+    border-color: #46e661;
+    color: #fff;
+  }
+  .tab-panels { padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+  .tab-panel { display: none; flex-direction: column; gap: 10px; }
+  .tab-panel.active { display: flex; }
+
+  .card {
+    background: #0d1e14;
+    border: 1px solid #154320;
+    border-radius: 8px;
+    padding: 10px;
+  }
+  .card-head { margin-bottom: 8px; }
+  .card-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #46e661;
+    font-weight: 700;
+    margin-bottom: 2px;
+  }
+  .card-sub { color: #8fa896; line-height: 1.35; font-size: 11px; }
+
+  .grid { display: grid; gap: 8px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .grid-5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+  .row { display: flex; align-items: center; gap: 8px; min-width: 0; position: relative; }
+  .label-wrap { width: 118px; flex-shrink: 0; display: flex; align-items: center; gap: 4px; }
+  .label { color: #cfcfcf; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .control { flex: 1; min-width: 0; }
+  input[type="number"], input[type="text"], select, button { width: 100%; font: inherit; }
+  input[type="number"], input[type="text"], select {
+    background: #08150e;
+    color: #f2f2f2;
+    border: 1px solid #154320;
+    border-radius: 6px;
+    padding: 6px 8px;
+    outline: none;
+  }
+  input[type="number"]:focus, input[type="text"]:focus, select:focus {
+    border-color: #46e661;
+    box-shadow: 0 0 0 1px #46e661 inset;
+  }
+  input[type="range"] { width: 100%; accent-color: #46e661; cursor: pointer; }
+  input[type="color"] {
+    width: 100%;
+    height: 32px;
+    border: 1px solid #154320;
+    border-radius: 6px;
+    background: #08150e;
+    padding: 2px;
+    cursor: pointer;
+  }
+  input[type="checkbox"] { transform: translateY(1px); accent-color: #46e661; }
+  .value { width: 54px; flex-shrink: 0; text-align: right; color: #46e661; font-variant-numeric: tabular-nums; }
+  .muted { color: #8fa896; font-size: 11px; line-height: 1.3; }
+  .toolbar { display: flex; gap: 6px; flex-wrap: wrap; }
+  .btn {
+    background: #0d1e14;
+    color: #f0f0f0;
+    border: 1px solid #154320;
+    border-radius: 6px;
+    padding: 7px 9px;
+    cursor: pointer;
+  }
+  .btn:hover { background: #154320; }
+  .btn-primary { background: #154320; border-color: #46e661; }
+  .btn-primary:hover { background: #1c572b; }
+  .btn-danger { background: #3a1a1a; border-color: #633; color: #ff8b8b; }
+  .btn-danger:hover { background: #4a2020; }
+  .btn-small { padding: 5px 7px; font-size: 11px; }
+  .pills { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+  .pill {
+    border: 1px solid #154320;
+    background: #08150e;
+    color: #d1d1d1;
+    border-radius: 7px;
+    padding: 7px 4px;
+    text-align: center;
+    cursor: pointer;
+    line-height: 1.2;
+    font-size: 11px;
+  }
+  .pill:hover { background: #132a1c; }
+  .pill.on { background: #154320; border-color: #46e661; color: #fff; }
+  .runtime { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .stat { background: #08150e; border: 1px solid #154320; border-radius: 6px; padding: 7px 8px; }
+  .stat-key { color: #8fa896; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 3px; }
+  .stat-val { color: #f0f0f0; font-size: 12px; font-variant-numeric: tabular-nums; word-break: break-word; }
+  .inline-check { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; }
+  .grad-preview {
+    height: 20px;
+    border-radius: 6px;
+    border: 1px solid #154320;
+    background: linear-gradient(90deg, #154320 0%, #46e661 100%);
+    margin-bottom: 8px;
+  }
+  .preset-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 8px; }
+  .preset-chip { height: 28px; border-radius: 6px; border: 2px solid transparent; cursor: pointer; background: #08150e; }
+  .preset-chip.on { border-color: #46e661; }
+  details { border-top: 1px solid #154320; padding-top: 8px; margin-top: 8px; }
+  details summary {
+    cursor: pointer;
+    color: #46e661;
+    font-weight: 600;
+    list-style: none;
+    margin-bottom: 8px;
+  }
+  details summary::-webkit-details-marker { display: none; }
+  .stop-list { display: flex; flex-direction: column; gap: 6px; }
+  .stop-row {
+    display: grid;
+    grid-template-columns: 34px 1fr 40px 24px;
+    gap: 6px;
+    align-items: center;
+    background: #08150e;
+    border: 1px solid #154320;
+    border-radius: 6px;
+    padding: 6px;
+  }
+  .mini-btn {
+    width: 24px;
+    height: 24px;
+    border: 1px solid #633;
+    background: #3a1a1a;
+    color: #ff8b8b;
+    border-radius: 5px;
+    cursor: pointer;
+  }
+  .mini-btn:disabled { opacity: 0.45; cursor: default; }
+  .error-box {
+    background: #3a1f22;
+    color: #ffc9cf;
+    border: 1px solid #6d3138;
+    border-radius: 6px;
+    padding: 8px;
+    line-height: 1.35;
+  }
+  .hidden { display: none !important; }
+  .help-icon {
+    width: 15px;
+    height: 15px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: #154320;
+    color: #46e661;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 15px;
+    text-align: center;
+    cursor: help;
+    user-select: none;
+  }
+  .help-icon:hover { background: #46e661; color: #08150e; }
+  .tooltip-bubble {
+    position: fixed;
+    max-width: 240px;
+    background: #050d09;
+    color: #e9f4ff;
+    border: 1px solid #46e661;
+    border-radius: 7px;
+    padding: 8px 10px;
+    font-size: 11px;
+    line-height: 1.4;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.45);
+    z-index: 1000;
+    pointer-events: none;
+    display: none;
+  }
+  .tooltip-bubble.visible { display: block; }
+  .conn-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+  .conn-badge.healthy { background: #12351f; color: #46e661; }
+  .conn-badge.unhealthy { background: #3a1f22; color: #ff8b8b; }
+  .conn-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .error-list { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+  .error-item {
+    background: #08150e;
+    border: 1px solid #3a2020;
+    border-radius: 5px;
+    padding: 5px 7px;
+    font-size: 10.5px;
+    color: #e0b0b0;
+    word-break: break-word;
+  }
+  .hint-box {
+    background: #08150e;
+    border: 1px solid #154320;
+    border-radius: 6px;
+    padding: 7px 9px;
+    font-size: 10.5px;
+    color: #8fa896;
+    line-height: 1.4;
+  }
+  .led-preview {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 70px;
+    background: #08150e;
+    border: 1px solid #154320;
+    border-radius: 6px;
+    padding: 6px;
+    margin-bottom: 8px;
+    overflow: hidden;
+  }
+  .led-preview-bar {
+    flex: 1;
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 1px;
+    height: 100%;
+    justify-content: flex-start;
+  }
+  .led-preview-seg {
+    border-radius: 1px;
+    border: 1px solid #000;
+    background: #154320;
+    flex-shrink: 0;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="tabs-bar" id="tabsBar">
+    <button type="button" class="tab-btn" data-tab="playback">Playback</button>
+    <button type="button" class="tab-btn" data-tab="spectrum">Spectrum</button>
+    <button type="button" class="tab-btn" data-tab="renderMode">Render</button>
+    <button type="button" class="tab-btn" data-tab="calibration">Audio dB</button>
+    <button type="button" class="tab-btn" data-tab="style">Style</button>
+    <button type="button" class="tab-btn" data-tab="advanced">Dynamika</button>
+  </div>
+
+  <div class="tab-panels">
+
+    <!-- ================= PLAYBACK ================= -->
+    <section class="tab-panel" data-tab-id="playback">
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">Playback</div>
+          <div class="card-sub">Urządzenie audio, status połączenia i diagnostyka.</div>
+        </div>
+        <div class="toolbar" style="margin-bottom:8px">
+          <button id="refreshDevicesBtn" class="btn">Odśwież</button>
+          <button id="pauseBtn" class="btn">Pause</button>
+        </div>
+        <div class="grid">
+          <div class="hint-box">
+            Wskazówka: klawisz na Stream Docku - krótkie kliknięcie = Pause/Resume.
+          </div>
+          <div class="row">
+            <div class="label-wrap">
+              <span class="label">Urządzenie</span>
+              <span class="help-icon" data-help="Wybór urządzenia audio do przechwytywania (WASAPI loopback). Domyślne śledzi systemowe urządzenie odtwarzania.">?</span>
+            </div>
+            <div class="control">
+              <select id="captureDeviceId">
+                <option value="default">Domyślne urządzenie systemowe</option>
+              </select>
+            </div>
+          </div>
+          <div class="row">
+            <div class="label-wrap"><span class="label">Połączenie</span></div>
+            <div class="control">
+              <span id="connBadge" class="conn-badge unhealthy"><span class="conn-dot"></span><span id="connBadgeText">Reconnecting...</span></span>
+            </div>
+          </div>
+          <div id="runtimeErrorBox" class="error-box hidden"></div>
+          <div id="errorHistoryBox" class="hidden">
+            <div class="muted">Ostatnie błędy:</div>
+            <div id="errorList" class="error-list"></div>
+          </div>
+          <div class="runtime">
+            <div class="stat"><div class="stat-key">Capture</div><div id="statCapture" class="stat-val">-</div></div>
+            <div class="stat"><div class="stat-key">Sample rate</div><div id="statSampleRate" class="stat-val">-</div></div>
+            <div class="stat"><div class="stat-key">Level dB</div><div id="statOverallDb" class="stat-val">-</div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= SPECTRUM ================= -->
+    <section class="tab-panel" data-tab-id="spectrum">
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">Spectrum</div>
+          <div class="card-sub">Zakres częstotliwości i liczba słupków.</div>
+        </div>
+        <div class="grid">
+          <div class="control">
+            <div class="pills" id="freqPresetPills">
+              <div class="pill" data-preset="low">Low<br><span class="muted">20-300</span></div>
+              <div class="pill" data-preset="mid">Mid<br><span class="muted">300-4k</span></div>
+              <div class="pill" data-preset="high">High<br><span class="muted">4k-20k</span></div>
+              <div class="pill" data-preset="full">Full<br><span class="muted">20-20k</span></div>
+              <div class="pill" data-preset="custom">Custom</div>
+            </div>
+          </div>
+          <div id="customFreqRows" class="grid hidden">
+            <div class="grid-2">
+              <div class="row">
+                <div class="label-wrap"><span class="label">Min Hz</span></div>
+                <div class="control"><input id="freqMin" type="number" min="20" max="20000" value="20"></div>
+              </div>
+              <div class="row">
+                <div class="label-wrap"><span class="label">Max Hz</span></div>
+                <div class="control"><input id="freqMax" type="number" min="20" max="20000" value="20000"></div>
+              </div>
+            </div>
+          </div>
+          <div class="row">
+            <div class="label-wrap"><span class="label">Słupki</span></div>
+            <div class="control"><input id="barCount" type="range" min="2" max="32" step="1" value="16"></div>
+            <div id="barCountVal" class="value">16</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= RENDER MODE ================= -->
+    <section class="tab-panel" data-tab-id="renderMode">
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">Render Mode</div>
+          <div class="card-sub">Styl wizualizacji i dodatkowe nakładki informacyjne.</div>
+        </div>
+        <div class="grid">
+          <div class="grid-5" id="renderModePills">
+            <div class="pill" data-mode="bars">Bars</div>
+            <div class="pill" data-mode="mirror">Mirror</div>
+            <div class="pill" data-mode="dots">Dots</div>
+            <div class="pill" data-mode="vuMeter">VU</div>
+            <div class="pill" data-mode="ledSegments">LED</div>
+          </div>
+
+          <div id="dotSpacingRow" class="row hidden">
+            <div class="label-wrap">
+              <span class="label">Dot spacing</span>
+              <span class="help-icon" data-help="Odstęp w pikselach między kropkami w trybie Dots.">?</span>
+            </div>
+            <div class="control"><input id="dotSpacing" type="range" min="2" max="10" step="1" value="3"></div>
+            <div id="dotSpacingVal" class="value">3</div>
+          </div>
+
+          <div id="ledSegmentSection" class="grid hidden">
+            <div class="led-preview" id="ledPreview"></div>
+
+            <div class="row">
+              <div class="label-wrap">
+                <span class="label">Segment mode</span>
+                <span class="help-icon" data-help="fixedCount = stała liczba segmentów niezależnie od wysokości słupka. fixedSize = segmenty o stałej wysokości w pikselach, liczba zapalonych zależy od wysokości słupka.">?</span>
+              </div>
+              <div class="control">
+                <select id="ledSegmentMode">
+                  <option value="fixedCount">Fixed count</option>
+                  <option value="fixedSize">Fixed size</option>
+                </select>
+              </div>
+            </div>
+
+            <div id="ledSegmentCountRow" class="row">
+              <div class="label-wrap"><span class="label">Segment count</span></div>
+              <div class="control"><input id="ledSegmentCount" type="range" min="4" max="24" step="1" value="14"></div>
+              <div id="ledSegmentCountVal" class="value">14</div>
+            </div>
+
+            <div id="ledSegmentSizeRow" class="row hidden">
+              <div class="label-wrap"><span class="label">Segment size</span></div>
+              <div class="control"><input id="ledSegmentSizePx" type="range" min="4" max="16" step="1" value="8"></div>
+              <div id="ledSegmentSizePxVal" class="value">8</div>
+            </div>
+
+            <div class="row">
+              <div class="label-wrap"><span class="label">Gap (px)</span></div>
+              <div class="control"><input id="ledSegmentGapPx" type="range" min="1" max="4" step="1" value="2"></div>
+              <div id="ledSegmentGapPxVal" class="value">2</div>
+            </div>
+
+            <div class="grid-3">
+              <div>
+                <div class="muted" style="margin-bottom:4px">Główne</div>
+                <input id="ledLowColor" type="color" value="#46e661">
+              </div>
+              <div>
+                <div class="muted" style="margin-bottom:4px">Środek</div>
+                <input id="ledMidColor" type="color" value="#46e661">
+              </div>
+              <div>
+                <div class="muted" style="margin-bottom:4px">Dodatkowe</div>
+                <input id="ledHighColor" type="color" value="#154320">
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="label-wrap">
+                <span class="label">Low threshold</span>
+                <span class="help-icon" data-help="Granica (0-1) między strefą Low i Mid.">?</span>
+              </div>
+              <div class="control"><input id="ledLowThreshold" type="range" min="0" max="1" step="0.01" value="0.5"></div>
+              <div id="ledLowThresholdVal" class="value">0.50</div>
+            </div>
+
+            <div class="row">
+              <div class="label-wrap">
+                <span class="label">High threshold</span>
+                <span class="help-icon" data-help="Granica (0-1) między strefą Mid i High (peak).">?</span>
+              </div>
+              <div class="control"><input id="ledHighThreshold" type="range" min="0" max="1" step="0.01" value="0.85"></div>
+              <div id="ledHighThresholdVal" class="value">0.85</div>
+            </div>
+          </div>
+
+          <div class="inline-check">
+            <span class="label-wrap" style="width:auto">
+              <span class="label">Numeric meter</span>
+              <span class="help-icon" data-help="Pokazuje liczbową wartość dB w rogu obrazu, niezależnie od wybranego trybu renderowania.">?</span>
+            </span>
+            <span><input id="showNumericMeter" type="checkbox"></span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= CALIBRATION (AUDIO DB) ================= -->
+    <section class="tab-panel" data-tab-id="calibration">
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">Czułość & Akustyka dB</div>
+          <div class="card-sub">Czysty silnik decybelowy — bez pływającej podłogi i opóźnień.</div>
+        </div>
+        <div class="grid">
+          <div class="row">
+            <div class="label-wrap">
+              <span class="label">Wzmocnienie (Gain)</span>
+              <span class="help-icon" data-help="Globalne podbicie słupków w decybelach. Jeśli słupki są za niskie, zwiększ na +6 do +18 dB.">?</span>
+            </div>
+            <div class="control"><input id="gainDb" type="range" min="-18" max="30" step="1" value="6"></div>
+            <div id="gainDbVal" class="value">+6 dB</div>
+          </div>
+
+          <div class="row">
+            <div class="label-wrap">
+              <span class="label">Podłoga (Min dB)</span>
+              <span class="help-icon" data-help="Dolny zakres dynamiczny wskaźnika. -48 dB to standard wieży audio. -30 dB reaguje tylko na głośne uderzenia.">?</span>
+            </div>
+            <div class="control"><input id="minDb" type="range" min="-72" max="-18" step="1" value="-48"></div>
+            <div id="minDbVal" class="value">-48 dB</div>
+          </div>
+
+          <div class="row">
+            <div class="label-wrap">
+              <span class="label">Balans pasm (Slope)</span>
+              <span class="help-icon" data-help="Kluczowy suwak: podbija średnie i wysokie tony o podaną wartość dB na oktawę. Standard to 3.5 - 4.5 dB/oct.">?</span>
+            </div>
+            <div class="control"><input id="slopeDbPerOct" type="range" min="0" max="8" step="0.25" value="4.0"></div>
+            <div id="slopeDbPerOctVal" class="value">4.0 dB</div>
+          </div>
+
+          <div class="row">
+            <div class="label-wrap">
+              <span class="label">Kontrast (Gamma)</span>
+              <span class="help-icon" data-help="Krzywa dynamiki: 1.0 = idealna liniowość dB. Wyższe wartości rozciągają ciche dźwięki w górę.">?</span>
+            </div>
+            <div class="control"><input id="gamma" type="range" min="0.30" max="3.00" step="0.05" value="1.00"></div>
+            <div id="gammaVal" class="value">1.00</div>
+          </div>
+
+          <div class="row">
+            <div class="label-wrap">
+              <span class="label">Bramka ciszy</span>
+              <span class="help-icon" data-help="Wygasza wskaźnik, gdy muzyka jest cichsza niż ten poziom dB.">?</span>
+            </div>
+            <div class="control"><input id="noiseGateDb" type="range" min="-90" max="-20" step="1" value="-65"></div>
+            <div id="noiseGateDbVal" class="value">-65 dB</div>
+          </div>
+
+          <details>
+            <summary>Eksport / Import ustawień</summary>
+            <div class="toolbar">
+              <button id="exportBtn" class="btn btn-small">Eksportuj do pliku</button>
+              <button id="importBtn" class="btn btn-small">Importuj z pliku</button>
+            </div>
+            <input id="importFileInput" type="file" accept=".json" class="hidden">
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= STYLE ================= -->
+    <section class="tab-panel" data-tab-id="style">
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">Style</div>
+          <div class="card-sub">Kolory, peak hold i kształt słupków (dla trybów Bars/Mirror/Dots/VU).</div>
+        </div>
+        <div class="grid">
+          <div class="grad-preview" id="gradPreview"></div>
+          <div class="preset-grid" id="gradientPresetGrid"></div>
+          <div class="row">
+            <div class="label-wrap"><span class="label">Tło</span></div>
+            <div class="control"><input id="bgColor" type="color" value="#08150e"></div>
+          </div>
+          <div class="row">
+            <div class="label-wrap"><span class="label">Promień</span></div>
+            <div class="control"><input id="topRadius" type="range" min="0" max="12" step="1" value="2"></div>
+            <div id="topRadiusVal" class="value">2</div>
+          </div>
+          <div class="inline-check">
+            <span class="label-wrap" style="width:auto"><span class="label">Peak hold</span></span>
+            <span><input id="peakHold" type="checkbox" checked></span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= ADVANCED ================= -->
+    <section class="tab-panel" data-tab-id="advanced">
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">Balistyka & Ruch</div>
+          <div class="card-sub">Fizyczne zachowanie wskaźnika analogowego (Attack / Release).</div>
+        </div>
+        <div class="grid">
+          <div class="row">
+            <div class="label-wrap">
+              <span class="label">Attack (Wzrost)</span>
+              <span class="help-icon" data-help="Jak szybko słupek uderza w górę. 0.8 - 1.0 daje natychmiastową reakcję bez lagu.">?</span>
+            </div>
+            <div class="control"><input id="attackSpeed" type="range" min="0.01" max="1.00" step="0.01" value="0.65"></div>
+            <div id="attackSpeedVal" class="value">0.65</div>
+          </div>
+          <div class="row">
+            <div class="label-wrap">
+              <span class="label">Release (Opad)</span>
+              <span class="help-icon" data-help="Jak płynnie słupek opada w dół. Mniejsze wartości dają maślane opadanie jak w wieżach audio.">?</span>
+            </div>
+            <div class="control"><input id="releaseSpeed" type="range" min="0.01" max="1.00" step="0.01" value="0.25"></div>
+            <div id="releaseSpeedVal" class="value">0.25</div>
+          </div>
+          <div class="row">
+            <div class="label-wrap"><span class="label">Płynność FFT</span></div>
+            <div class="control"><input id="smoothing" type="range" min="0" max="0.85" step="0.01" value="0.22"></div>
+            <div id="smoothingVal" class="value">0.22</div>
+          </div>
+          <div class="row">
+            <div class="label-wrap"><span class="label">Peak fall</span></div>
+            <div class="control"><input id="peakFallSpeed" type="range" min="0.005" max="0.25" step="0.005" value="0.08"></div>
+            <div id="peakFallSpeedVal" class="value">0.08</div>
+          </div>
+          <div class="row">
+            <div class="label-wrap"><span class="label">Peak width</span></div>
+            <div class="control"><input id="peakThickness" type="range" min="1" max="8" step="1" value="2"></div>
+            <div id="peakThicknessVal" class="value">2</div>
+          </div>
+          <div class="inline-check">
+            <span class="label-wrap" style="width:auto">
+              <span class="label">Auto-pause</span>
+              <span class="help-icon" data-help="Automatycznie wstrzymuje renderowanie po okresie ciszy, oszczędzając zasoby, gdy nic nie gra.">?</span>
+            </span>
+            <span><input id="autoPauseEnabled" type="checkbox"></span>
+          </div>
+          <div id="autoPauseTimeoutRow" class="row hidden">
+            <div class="label-wrap"><span class="label">Timeout (s)</span></div>
+            <div class="control"><input id="autoPauseTimeoutSec" type="range" min="5" max="120" step="5" value="30"></div>
+            <div id="autoPauseTimeoutSecVal" class="value">30</div>
+          </div>
+
+          <details>
+            <summary>Ręczna edycja gradientu</summary>
+            <div class="stop-list" id="stopsContainer"></div>
+            <button id="addStopBtn" class="btn btn-primary" style="margin-top:8px">Dodaj punkt koloru</button>
+          </details>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<div id="tooltipBubble" class="tooltip-bubble"></div>
+
+<script src="index.js"></script>
+</body>
+</html>
