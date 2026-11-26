@@ -363,6 +363,7 @@ MigrationBackup/
 FodyWeavers.xsd
 # Stream Dock plugin build output, logs & duplicate presets
 Plugin/
+dist/
 src/bin/
 src/obj/
 *.log

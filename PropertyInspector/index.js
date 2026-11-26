@@ -34,6 +34,8 @@ function defaults() {
     freqPreset: "full",
     freqMin: 20,
     freqMax: 20000,
+    spanCount: 1,
+    spanIndex: 1,
     barCount: 16,
     gainDb: 6.0,
     minDb: -48.0,
@@ -51,8 +53,11 @@ function defaults() {
     gradientStops: cloneStops(GRADIENT_PRESETS[0].stops),
     paused: false,
     renderMode: "bars",
+    longPressAction: "cycleRenderMode",
     dotSpacing: 3,
     showNumericMeter: false,
+    beatPulseEnabled: false,
+    idleIconEnabled: false,
     autoPauseEnabled: false,
     autoPauseTimeoutSec: 30,
     ledSegmentMode: "fixedCount",
@@ -156,6 +161,8 @@ function normalizeSettings(input) {
     s.freqMin = s.freqMax;
     s.freqMax = temp;
   }
+  s.spanCount = clampInt(s.spanCount, 1, 6, 1);
+  s.spanIndex = clampInt(s.spanIndex, 1, s.spanCount, 1);
   s.barCount = clampInt(s.barCount, 2, 32, 16);
 
   s.gainDb = clampFloat(s.gainDb, -18.0, 30.0, 6.0);
@@ -174,11 +181,16 @@ function normalizeSettings(input) {
   s.bgColor = normalizeHex(s.bgColor, "#08150e");
   s.paused = !!s.paused;
 
-  if (!["bars", "vuMeter", "mirror", "dots", "ledSegments"].includes(s.renderMode)) {
+  if (!["bars", "vuMeter", "mirror", "dots", "ledSegments", "waveform", "stereo"].includes(s.renderMode)) {
     s.renderMode = "bars";
+  }
+  if (!["cycleRenderMode", "cycleGradientPreset", "togglePause", "none"].includes(s.longPressAction)) {
+    s.longPressAction = "cycleRenderMode";
   }
   s.dotSpacing = clampInt(s.dotSpacing, 2, 10, 3);
   s.showNumericMeter = !!s.showNumericMeter;
+  s.beatPulseEnabled = !!s.beatPulseEnabled;
+  s.idleIconEnabled = !!s.idleIconEnabled;
   s.autoPauseEnabled = !!s.autoPauseEnabled;
   s.autoPauseTimeoutSec = clampInt(s.autoPauseTimeoutSec, 5, 120, 30);
 
@@ -210,11 +222,15 @@ function normalizeSettings(input) {
 
 function loadUiFromSettings(s) {
   setSelectValue("captureDeviceId", s.captureDeviceId);
+  setSelectValue("longPressAction", s.longPressAction);
+  setSelectValue("spanCount", String(s.spanCount));
+  updateSpanIndexOptions(s.spanCount, s.spanIndex);
+  toggleVisibility("spanIndexRow", s.spanCount > 1);
 
   setRange("barCount", "barCountVal", s.barCount, 0, "");
   setRange("gainDb", "gainDbVal", s.gainDb, 0, " dB", true);
   setRange("minDb", "minDbVal", s.minDb, 0, " dB");
-  setRange("slopeDbPerOct", "slopeDbPerOctVal", 2, " dB");
+  setRange("slopeDbPerOct", "slopeDbPerOctVal", s.slopeDbPerOct, 2, " dB");
   setRange("gamma", "gammaVal", s.gamma, 2, "");
   setRange("noiseGateDb", "noiseGateDbVal", s.noiseGateDb, 0, " dB");
 
@@ -247,6 +263,8 @@ function loadUiFromSettings(s) {
 
   setCheckbox("peakHold", s.peakHold);
   setCheckbox("showNumericMeter", s.showNumericMeter);
+  setCheckbox("beatPulseEnabled", s.beatPulseEnabled);
+  setCheckbox("idleIconEnabled", s.idleIconEnabled);
   setCheckbox("autoPauseEnabled", s.autoPauseEnabled);
 
   toggleVisibility("dotSpacingRow", s.renderMode === "dots");
@@ -339,6 +357,19 @@ function setFreqPresetUi(preset, customMin, customMax) {
   }
 }
 
+function updateSpanIndexOptions(spanCount, selectedIndex) {
+  const el = document.getElementById("spanIndex");
+  if (!el) return;
+  while (el.options.length > 0) el.remove(0);
+  for (let i = 1; i <= spanCount; i++) {
+    const opt = document.createElement("option");
+    opt.value = String(i);
+    opt.textContent = i + " / " + spanCount;
+    el.add(opt);
+  }
+  el.value = String(clampInt(selectedIndex, 1, spanCount, 1));
+}
+
 function setRenderModePillUi(mode) {
   document.querySelectorAll("#renderModePills [data-mode]").forEach(el => {
     el.classList.toggle("on", el.dataset.mode === mode);
@@ -351,6 +382,8 @@ function collectSettingsFromUi() {
     freqPreset: currentFreqPreset,
     freqMin: parseInt(getValue("freqMin", "20"), 10),
     freqMax: parseInt(getValue("freqMax", "20000"), 10),
+    spanCount: parseInt(getValue("spanCount", "1"), 10),
+    spanIndex: parseInt(getValue("spanIndex", "1"), 10),
     barCount: parseInt(getValue("barCount", "16"), 10),
     gainDb: parseFloat(getValue("gainDb", "6.0")),
     minDb: parseFloat(getValue("minDb", "-48.0")),
@@ -367,8 +400,11 @@ function collectSettingsFromUi() {
     bgColor: getValue("bgColor", "#08150e"),
     paused: !!settings?.paused,
     renderMode: settings?.renderMode || "bars",
+    longPressAction: getValue("longPressAction", "cycleRenderMode"),
     dotSpacing: parseInt(getValue("dotSpacing", "3"), 10),
     showNumericMeter: !!document.getElementById("showNumericMeter")?.checked,
+    beatPulseEnabled: !!document.getElementById("beatPulseEnabled")?.checked,
+    idleIconEnabled: !!document.getElementById("idleIconEnabled")?.checked,
     autoPauseEnabled: !!document.getElementById("autoPauseEnabled")?.checked,
     autoPauseTimeoutSec: parseInt(getValue("autoPauseTimeoutSec", "30"), 10),
     ledSegmentMode: getValue("ledSegmentMode", "fixedCount"),
@@ -885,9 +921,17 @@ function initUi() {
   bindRange("ledLowThreshold", "ledLowThresholdVal", 2, "", false, previewSettings);
   bindRange("ledHighThreshold", "ledHighThresholdVal", 2, "", false, previewSettings);
 
-  ["captureDeviceId", "freqMin", "freqMax", "peakHold", "bgColor",
-   "showNumericMeter", "ledLowColor", "ledMidColor", "ledHighColor"
+  ["captureDeviceId", "longPressAction", "spanIndex", "freqMin", "freqMax", "peakHold", "bgColor",
+   "showNumericMeter", "beatPulseEnabled", "idleIconEnabled", "ledLowColor", "ledMidColor", "ledHighColor"
   ].forEach(id => bindSimpleChange(id, () => previewSettings()));
+
+  bindSimpleChange("spanCount", () => {
+    const count = clampInt(getValue("spanCount", "1"), 1, 6, 1);
+    const currentIdx = clampInt(getValue("spanIndex", "1"), 1, count, 1);
+    updateSpanIndexOptions(count, currentIdx);
+    toggleVisibility("spanIndexRow", count > 1);
+    previewSettings();
+  });
 
   bindSimpleChange("ledSegmentMode", () => {
     const mode = getValue("ledSegmentMode", "fixedCount");

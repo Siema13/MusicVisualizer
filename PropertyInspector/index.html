@@ -74,6 +74,7 @@
   .grid { display: grid; gap: 8px; }
   .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
   .grid-5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
   .row { display: flex; align-items: center; gap: 8px; min-width: 0; position: relative; }
   .label-wrap { width: 118px; flex-shrink: 0; display: flex; align-items: center; gap: 4px; }
@@ -306,7 +307,21 @@
         </div>
         <div class="grid">
           <div class="hint-box">
-            Wskazówka: klawisz na Stream Docku - krótkie kliknięcie = Pause/Resume.
+            Wskazówka: krótkie kliknięcie = Pause/Resume, długie (≥ 0.6 s) = akcja Long Press.
+          </div>
+          <div class="row">
+            <div class="label-wrap">
+              <span class="label">Long Press</span>
+              <span class="help-icon" data-help="Akcja wykonywana po przytrzymaniu przycisku przez minimum 0.6 s.">?</span>
+            </div>
+            <div class="control">
+              <select id="longPressAction">
+                <option value="cycleRenderMode">Zmień tryb renderu</option>
+                <option value="cycleGradientPreset">Zmień preset kolorów</option>
+                <option value="togglePause">Pause / Resume</option>
+                <option value="none">Wyłączone</option>
+              </select>
+            </div>
           </div>
           <div class="row">
             <div class="label-wrap">
@@ -373,6 +388,37 @@
             <div class="control"><input id="barCount" type="range" min="2" max="32" step="1" value="16"></div>
             <div id="barCountVal" class="value">16</div>
           </div>
+          <div class="grid-2">
+            <div class="row">
+              <div class="label-wrap" style="width:92px">
+                <span class="label">Multi-Key</span>
+                <span class="help-icon" data-help="Dzieli wybrany zakres częstotliwości na N sąsiednich przycisków (np. 3 kafelki = jeden szeroki wizualizator).">?</span>
+              </div>
+              <div class="control">
+                <select id="spanCount">
+                  <option value="1">1 (wył.)</option>
+                  <option value="2">2 kafelki</option>
+                  <option value="3">3 kafelki</option>
+                  <option value="4">4 kafelki</option>
+                  <option value="5">5 kafelków</option>
+                  <option value="6">6 kafelków</option>
+                </select>
+              </div>
+            </div>
+            <div id="spanIndexRow" class="row hidden">
+              <div class="label-wrap" style="width:72px"><span class="label">Pozycja</span></div>
+              <div class="control">
+                <select id="spanIndex">
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                  <option value="3">3</option>
+                  <option value="4">4</option>
+                  <option value="5">5</option>
+                  <option value="6">6</option>
+                </select>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -385,12 +431,14 @@
           <div class="card-sub">Styl wizualizacji i dodatkowe nakładki informacyjne.</div>
         </div>
         <div class="grid">
-          <div class="grid-5" id="renderModePills">
+          <div class="grid-4" id="renderModePills">
             <div class="pill" data-mode="bars">Bars</div>
             <div class="pill" data-mode="mirror">Mirror</div>
             <div class="pill" data-mode="dots">Dots</div>
             <div class="pill" data-mode="vuMeter">VU</div>
             <div class="pill" data-mode="ledSegments">LED</div>
+            <div class="pill" data-mode="waveform">Wave</div>
+            <div class="pill" data-mode="stereo">Stereo</div>
           </div>
 
           <div id="dotSpacingRow" class="row hidden">
@@ -476,6 +524,20 @@
               <span class="help-icon" data-help="Pokazuje liczbową wartość dB w rogu obrazu, niezależnie od wybranego trybu renderowania.">?</span>
             </span>
             <span><input id="showNumericMeter" type="checkbox"></span>
+          </div>
+          <div class="inline-check">
+            <span class="label-wrap" style="width:auto">
+              <span class="label">Beat Pulse (ramka basu)</span>
+              <span class="help-icon" data-help="Delikatnie podświetla obramowanie przycisku w rytm uderzeń basu (20–120 Hz).">?</span>
+            </span>
+            <span><input id="beatPulseEnabled" type="checkbox"></span>
+          </div>
+          <div class="inline-check">
+            <span class="label-wrap" style="width:auto">
+              <span class="label">Ikona ciszy / pauzy</span>
+              <span class="help-icon" data-help="Pokazuje subtelną ikonę pauzy (||) lub ciszy, gdy wskaźnik jest zatrzymany.">?</span>
+            </span>
+            <span><input id="idleIconEnabled" type="checkbox"></span>
           </div>
         </div>
       </div>

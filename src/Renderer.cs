@@ -1,0 +1,914 @@
+using System;
+using System.Buffers.Binary;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Globalization;
+using System.IO;
+using System.IO.Compression;
+using System.Threading;
+
+namespace MusicVisualizerLoopback
+{
+    internal static class Renderer
+    {
+        private static readonly byte[] PngSignature = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+        private static readonly byte[] ChunkTypeIhdr = { (byte)'I', (byte)'H', (byte)'D', (byte)'R' };
+        private static readonly byte[] ChunkTypePlte = { (byte)'P', (byte)'L', (byte)'T', (byte)'E' };
+        private static readonly byte[] ChunkTypeIdat = { (byte)'I', (byte)'D', (byte)'A', (byte)'T' };
+        private static readonly byte[] PngIendChunk = { 0x00, 0x00, 0x00, 0x00, (byte)'I', (byte)'E', (byte)'N', (byte)'D', 0xAE, 0x42, 0x60, 0x82 };
+        private static readonly uint[] CrcTable = BuildCrc32Table();
+
+        // Fixed high palette indices (valid for all render heights <= 240 px; 255 total palette entries)
+        private const int PaletteSize = 255;
+        private const byte IdxBg = 0;
+        private const byte IdxLedLow = 1;
+        private const byte IdxLedMid = 2;
+        private const byte IdxLedHigh = 3;
+        private const byte IdxBlack = 248;
+        private const byte IdxOverlayBg = 249;
+        private const byte IdxWhite = 250;
+        private const byte IdxVuArc = 251;
+        private const byte IdxPulse1 = 252;
+        private const byte IdxPulse2 = 253;
+        private const byte IdxPulse3 = 254;
+
+        private sealed class RenderScratch : IDisposable
+        {
+            public readonly MemoryStream Stream;
+            public readonly MemoryStream ZlibStreamBuffer;
+            public readonly byte[] IndexedScanlines;
+            public readonly int Width;
+            public readonly int Height;
+
+            public RenderScratch(int width, int height)
+            {
+                Width = width;
+                Height = height;
+                Stream = new MemoryStream(4096);
+                ZlibStreamBuffer = new MemoryStream(4096);
+                IndexedScanlines = new byte[(width + 1) * height];
+            }
+
+            public void Dispose()
+            {
+                Stream.Dispose();
+                ZlibStreamBuffer.Dispose();
+            }
+        }
+
+        private static readonly ThreadLocal<RenderScratch?> _scratch = new ThreadLocal<RenderScratch?>(false);
+
+        public static void DisposeThreadScratch()
+        {
+            if (_scratch.IsValueCreated)
+            {
+                _scratch.Value?.Dispose();
+                _scratch.Value = null;
+            }
+        }
+
+        private static RenderScratch GetScratch(int width, int height)
+        {
+            var s = _scratch.Value;
+            if (s == null || s.Width != width || s.Height != height)
+            {
+                s?.Dispose();
+                s = new RenderScratch(width, height);
+                _scratch.Value = s;
+            }
+            return s;
+        }
+
+        public static ArraySegment<byte> RenderToPngBytes(int width, int height, ActionRuntime runtime)
+        {
+            var settings = runtime.Settings;
+            var scratch = GetScratch(width, height);
+            byte[] header = GetOrBuildIndexedPngHeader(runtime, width, height);
+            byte[] raw = scratch.IndexedScanlines;
+            Array.Clear(raw, 0, raw.Length);
+
+            // Optional Beat Pulse reactive frame/border on bass hits
+            if (settings.BeatPulseEnabled && !settings.Paused && runtime.BeatPulseLevel > 0.12f)
+            {
+                RenderBeatPulseFrame(raw, width, height, runtime.BeatPulseLevel);
+            }
+
+            // Render selected visualization mode (all 7 modes on zero-GC 8-bit indexed PNG path)
+            switch (settings.RenderMode)
+            {
+                case "ledSegments":
+                    RenderIndexedLedSegments(raw, width, height, settings, runtime.Bars);
+                    break;
+                case "mirror":
+                    RenderIndexedMirrorBars(raw, width, height, settings, runtime.Bars);
+                    break;
+                case "dots":
+                    RenderIndexedDots(raw, width, height, settings, runtime.Bars);
+                    break;
+                case "vuMeter":
+                    RenderIndexedVuMeter(raw, width, height, runtime.Bars);
+                    break;
+                case "waveform":
+                    RenderIndexedWaveform(raw, width, height, runtime.Waveform);
+                    break;
+                case "stereo":
+                    RenderIndexedStereo(raw, width, height, settings, runtime.StereoLeft, runtime.StereoRight, runtime.StereoPeakLeft, runtime.StereoPeakRight);
+                    break;
+                default:
+                    RenderIndexedBars(raw, width, height, settings, runtime.Bars, runtime.Peaks);
+                    break;
+            }
+
+            // Optional Idle / Pause glyph when paused or silent
+            if (settings.IdleIconEnabled && (settings.Paused || runtime.IsIdleState))
+            {
+                RenderIdleOrPauseIcon(raw, width, height, settings.Paused);
+            }
+
+            // Optional Numeric dB overlay using built-in crisp 5x7 bitmap pixel font (0 GC)
+            if (settings.ShowNumericMeter)
+            {
+                RenderNumericOverlayIndexed(raw, width, height, runtime.LastOverallLevel);
+            }
+
+            return EncodeIndexedPng(header, raw, scratch.ZlibStreamBuffer, scratch.Stream);
+        }
+
+        private static byte[] GetOrBuildIndexedPngHeader(ActionRuntime runtime, int width, int height)
+        {
+            var settings = runtime.Settings;
+            byte[]? cached = runtime.CachedIndexedPngHeader;
+            if (cached != null &&
+                runtime.CachedPngHeaderWidth == width &&
+                runtime.CachedPngHeaderHeight == height &&
+                runtime.CachedPngHeaderSettingsVersion == runtime.SettingsVersion &&
+                string.Equals(runtime.CachedPngHeaderMode, settings.RenderMode, StringComparison.Ordinal))
+            {
+                return cached;
+            }
+
+            Color bg = ParseColor(settings.BgColor);
+            Color accent = settings.RenderMode == "ledSegments"
+                ? ParseColor(settings.LedLowColor)
+                : InterpolateColor(settings.GradientStops, 0.85f);
+
+            byte[] paletteRgb = new byte[PaletteSize * 3];
+            WriteRgb(paletteRgb, IdxBg, bg);
+
+            if (settings.RenderMode == "ledSegments")
+            {
+                WriteRgb(paletteRgb, IdxLedLow, ParseColor(settings.LedLowColor));
+                WriteRgb(paletteRgb, IdxLedMid, ParseColor(settings.LedMidColor));
+                WriteRgb(paletteRgb, IdxLedHigh, ParseColor(settings.LedHighColor));
+            }
+            else
+            {
+                int gradCount = Math.Min(height, 240);
+                float denom = Math.Max(1, gradCount - 1);
+                for (int y = 0; y < gradCount; y++)
+                {
+                    float t = 1.0f - (y / denom);
+                    Color rowColor = InterpolateColor(settings.GradientStops, t);
+                    WriteRgb(paletteRgb, 1 + y, rowColor);
+                }
+            }
+
+            WriteRgb(paletteRgb, IdxBlack, Color.Black);
+            WriteRgb(paletteRgb, IdxOverlayBg, Blend(bg, Color.Black, 0.65f));
+            WriteRgb(paletteRgb, IdxWhite, Color.White);
+            WriteRgb(paletteRgb, IdxVuArc, Blend(bg, Color.White, 0.35f));
+            WriteRgb(paletteRgb, IdxPulse1, Blend(bg, accent, 0.28f));
+            WriteRgb(paletteRgb, IdxPulse2, Blend(bg, accent, 0.55f));
+            WriteRgb(paletteRgb, IdxPulse3, Blend(bg, accent, 0.85f));
+
+            // Signature (8) + IHDR chunk (25) + PLTE chunk (12 + paletteRgb.Length)
+            byte[] header = new byte[8 + 25 + 12 + paletteRgb.Length];
+            int pos = 0;
+
+            Buffer.BlockCopy(PngSignature, 0, header, pos, 8);
+            pos += 8;
+
+            Span<byte> ihdrData = stackalloc byte[13];
+            BinaryPrimitives.WriteInt32BigEndian(ihdrData.Slice(0, 4), width);
+            BinaryPrimitives.WriteInt32BigEndian(ihdrData.Slice(4, 4), height);
+            ihdrData[8] = 8;  // Bit depth: 8
+            ihdrData[9] = 3;  // Color type: 3 (Indexed)
+            ihdrData[10] = 0; // Compression: Deflate
+            ihdrData[11] = 0; // Filter: Adaptive
+            ihdrData[12] = 0; // Interlace: None
+            pos = WritePngChunk(header, pos, ChunkTypeIhdr, ihdrData);
+
+            WritePngChunk(header, pos, ChunkTypePlte, paletteRgb);
+
+            runtime.CachedIndexedPngHeader = header;
+            runtime.CachedPngHeaderWidth = width;
+            runtime.CachedPngHeaderHeight = height;
+            runtime.CachedPngHeaderMode = settings.RenderMode;
+            runtime.CachedPngHeaderSettingsVersion = runtime.SettingsVersion;
+            return header;
+        }
+
+        private static byte GradientIndexForRow(int y, int height)
+        {
+            int maxGrad = Math.Min(height, 240);
+            if (height <= 240)
+            {
+                return (byte)(1 + Math.Clamp(y, 0, maxGrad - 1));
+            }
+            return (byte)(1 + Math.Clamp((int)((y / (float)Math.Max(1, height - 1)) * (maxGrad - 1)), 0, maxGrad - 1));
+        }
+
+        private static byte GradientIndexForNormalized(float t, int height)
+        {
+            int maxGrad = Math.Min(height, 240);
+            int idx = (int)MathF.Round((1f - Math.Clamp(t, 0f, 1f)) * (maxGrad - 1));
+            return (byte)(1 + Math.Clamp(idx, 0, maxGrad - 1));
+        }
+
+        private static void RenderBeatPulseFrame(byte[] raw, int width, int height, float beatLevel)
+        {
+            byte borderIdx = beatLevel > 0.65f ? IdxPulse3 : (beatLevel > 0.35f ? IdxPulse2 : IdxPulse1);
+            int thickness = beatLevel > 0.65f ? 2 : 1;
+            int stride = width + 1;
+
+            for (int t = 0; t < thickness && t < height / 2 && t < width / 2; t++)
+            {
+                raw.AsSpan(t * stride + 1 + t, width - t * 2).Fill(borderIdx);
+                raw.AsSpan((height - 1 - t) * stride + 1 + t, width - t * 2).Fill(borderIdx);
+                for (int y = t; y < height - t; y++)
+                {
+                    raw[y * stride + 1 + t] = borderIdx;
+                    raw[y * stride + 1 + (width - 1 - t)] = borderIdx;
+                }
+            }
+        }
+
+        private static void RenderIndexedBars(byte[] raw, int width, int height, VisualizerSettings settings, float[] bars, float[] peaks)
+        {
+            int stride = width + 1;
+            int barCount = Math.Clamp(settings.BarCount, 2, 32);
+            float barWidth = width / (float)barCount;
+            float gap = Math.Max(1f, MathF.Floor(barWidth * 0.14f));
+            float drawWidth = Math.Max(1f, barWidth - gap);
+            float scale = height / 144f;
+            int scaledTopRadius = settings.TopRadius > 0 ? Math.Max(1, (int)MathF.Round(settings.TopRadius * scale)) : 0;
+            int scaledPeakThickness = Math.Max(1, (int)MathF.Round(settings.PeakThickness * scale));
+
+            for (int i = 0; i < barCount; i++)
+            {
+                float value = i < bars.Length ? Math.Clamp(bars[i], 0f, 1f) : 0f;
+                int x0 = Math.Clamp((int)MathF.Round(i * barWidth + gap * 0.5f), 0, width - 1);
+                int x1 = Math.Clamp((int)MathF.Round(i * barWidth + gap * 0.5f + drawWidth), x0 + 1, width);
+                int barW = x1 - x0;
+                int barH = Math.Clamp((int)MathF.Round(Math.Max(2f * scale, value * height)), 1, height);
+                int y0 = height - barH;
+                int radius = Math.Min(scaledTopRadius, Math.Min(barW / 2, barH));
+
+                for (int y = y0; y < height; y++)
+                {
+                    int rx0 = x0;
+                    int rx1 = x1;
+                    int dy = y - y0;
+                    if (radius > 0 && dy < radius)
+                    {
+                        float cy = radius - dy - 0.5f;
+                        float dx = MathF.Sqrt(Math.Max(0f, radius * radius - cy * cy));
+                        int inset = Math.Max(0, (int)MathF.Floor(radius - dx));
+                        rx0 = Math.Min(x1 - 1, x0 + inset);
+                        rx1 = Math.Max(rx0 + 1, x1 - inset);
+                    }
+
+                    raw.AsSpan(y * stride + 1 + rx0, rx1 - rx0).Fill(GradientIndexForRow(y, height));
+                }
+
+                if (settings.PeakHold)
+                {
+                    float peakValue = i < peaks.Length ? Math.Clamp(peaks[i], 0f, 1f) : 0f;
+                    int peakY = Math.Clamp((int)MathF.Round(height - peakValue * height), Math.Max(1, (int)MathF.Round(2f * scale)), height - 1);
+                    int peakEndY = Math.Min(height, peakY + scaledPeakThickness);
+                    byte peakColorIdx = GradientIndexForNormalized(peakValue, height);
+                    for (int py = peakY; py < peakEndY; py++)
+                    {
+                        raw.AsSpan(py * stride + 1 + x0, barW).Fill(peakColorIdx);
+                    }
+                }
+            }
+        }
+
+        private static void RenderIndexedMirrorBars(byte[] raw, int width, int height, VisualizerSettings settings, float[] bars)
+        {
+            int stride = width + 1;
+            int barCount = Math.Clamp(settings.BarCount, 2, 32);
+            float barWidth = width / (float)barCount;
+            float gap = Math.Max(1f, MathF.Floor(barWidth * 0.14f));
+            float drawWidth = Math.Max(1f, barWidth - gap);
+            float centerY = height * 0.5f;
+            float scale = height / 144f;
+            int scaledTopRadius = settings.TopRadius > 0 ? Math.Max(1, (int)MathF.Round(settings.TopRadius * scale)) : 0;
+
+            for (int i = 0; i < barCount; i++)
+            {
+                float value = i < bars.Length ? Math.Clamp(bars[i], 0f, 1f) : 0f;
+                int x0 = Math.Clamp((int)MathF.Round(i * barWidth + gap * 0.5f), 0, width - 1);
+                int x1 = Math.Clamp((int)MathF.Round(i * barWidth + gap * 0.5f + drawWidth), x0 + 1, width);
+                int barW = x1 - x0;
+                float halfH = Math.Max(1f, value * centerY);
+                int y0 = Math.Clamp((int)MathF.Round(centerY - halfH), 0, height - 1);
+                int y1 = Math.Clamp((int)MathF.Round(centerY + halfH), y0 + 1, height);
+                int radius = Math.Min(scaledTopRadius, Math.Min(barW / 2, (int)halfH));
+
+                for (int y = y0; y < y1; y++)
+                {
+                    int rx0 = x0;
+                    int rx1 = x1;
+                    int dy = y - y0;
+                    if (radius > 0 && dy < radius)
+                    {
+                        float cy = radius - dy - 0.5f;
+                        float dx = MathF.Sqrt(Math.Max(0f, radius * radius - cy * cy));
+                        int inset = Math.Max(0, (int)MathF.Floor(radius - dx));
+                        rx0 = Math.Min(x1 - 1, x0 + inset);
+                        rx1 = Math.Max(rx0 + 1, x1 - inset);
+                    }
+
+                    raw.AsSpan(y * stride + 1 + rx0, rx1 - rx0).Fill(GradientIndexForRow(y, height));
+                }
+            }
+        }
+
+        private static void RenderIndexedLedSegments(byte[] raw, int width, int height, VisualizerSettings settings, float[] bars)
+        {
+            int stride = width + 1;
+            int barCount = Math.Clamp(settings.BarCount, 2, 32);
+            float barWidth = width / (float)barCount;
+            float barGap = Math.Max(1f, MathF.Floor(barWidth * 0.14f));
+            float drawWidth = Math.Max(2f, barWidth - barGap);
+            float scale = height / 144f;
+
+            int gapPx = Math.Max(1, (int)MathF.Round(Math.Clamp(settings.LedSegmentGapPx, 1, 4) * scale));
+
+            int totalSegments;
+            float segmentHeight;
+            if (settings.LedSegmentMode == "fixedSize")
+            {
+                int segmentSizePx = Math.Max(2, (int)MathF.Round(Math.Clamp(settings.LedSegmentSizePx, 4, 16) * scale));
+                totalSegments = Math.Max(1, (int)(height / (float)(segmentSizePx + gapPx)));
+                segmentHeight = segmentSizePx;
+            }
+            else
+            {
+                totalSegments = Math.Clamp(settings.LedSegmentCount, 4, 24);
+                float totalGap = gapPx * Math.Max(0, totalSegments - 1);
+                segmentHeight = Math.Max(2f, (height - totalGap) / totalSegments);
+            }
+
+            double lowThreshold = Math.Clamp(settings.LedLowThreshold, 0.0, 1.0);
+            double highThreshold = Math.Clamp(settings.LedHighThreshold, lowThreshold, 1.0);
+
+            for (int i = 0; i < barCount; i++)
+            {
+                float value = i < bars.Length ? Math.Clamp(bars[i], 0f, 1f) : 0f;
+                int litSegments = (int)Math.Round(value * totalSegments);
+                int x0 = Math.Clamp((int)MathF.Round(i * barWidth + barGap * 0.5f), 0, width - 1);
+                int x1 = Math.Clamp((int)MathF.Round(i * barWidth + barGap * 0.5f + drawWidth), x0 + 1, width);
+                int barW = x1 - x0;
+
+                for (int s = 0; s < litSegments; s++)
+                {
+                    float fy = height - (s + 1) * (segmentHeight + gapPx) + gapPx;
+                    if (fy < -segmentHeight)
+                    {
+                        break;
+                    }
+
+                    int y0 = Math.Clamp((int)MathF.Round(fy), 0, height - 1);
+                    int y1 = Math.Clamp((int)MathF.Round(fy + segmentHeight), y0 + 1, height);
+
+                    double ratio = (s + 1) / (double)totalSegments;
+                    byte colorIdx = ratio > highThreshold ? IdxLedHigh : (ratio > lowThreshold ? IdxLedMid : IdxLedLow);
+
+                    bool drawBorder = barW >= 4 && (y1 - y0) >= 5;
+                    for (int y = y0; y < y1; y++)
+                    {
+                        var rowSpan = raw.AsSpan(y * stride + 1 + x0, barW);
+                        if (drawBorder)
+                        {
+                            if (y == y0 || y == y1 - 1)
+                            {
+                                rowSpan.Fill(IdxBlack);
+                            }
+                            else
+                            {
+                                rowSpan.Fill(colorIdx);
+                                rowSpan[0] = IdxBlack;
+                                rowSpan[barW - 1] = IdxBlack;
+                            }
+                        }
+                        else
+                        {
+                            rowSpan.Fill(colorIdx);
+                        }
+                    }
+                }
+            }
+        }
+
+        private static void RenderIndexedDots(byte[] raw, int width, int height, VisualizerSettings settings, float[] bars)
+        {
+            int barCount = Math.Clamp(settings.BarCount, 2, 32);
+            float barWidth = width / (float)barCount;
+            float gap = Math.Max(1f, MathF.Floor(barWidth * 0.14f));
+            float drawWidth = Math.Max(2f, barWidth - gap);
+            float scale = height / 144f;
+            float spacing = Math.Max(1f, Math.Clamp(settings.DotSpacing, 2, 10) * scale);
+            float dotSize = Math.Max(2f, drawWidth);
+            int maxDots = Math.Max(1, (int)(height / (dotSize + spacing)));
+            float radius = dotSize * 0.5f;
+
+            for (int i = 0; i < barCount; i++)
+            {
+                float value = i < bars.Length ? Math.Clamp(bars[i], 0f, 1f) : 0f;
+                int litDots = (int)Math.Round(value * maxDots);
+                float cx = i * barWidth + gap * 0.5f + radius;
+
+                for (int d = 0; d < litDots; d++)
+                {
+                    float y = height - (d + 1) * (dotSize + spacing) + spacing;
+                    if (y < -dotSize)
+                    {
+                        break;
+                    }
+
+                    float cy = y + radius;
+                    float t = (float)d / Math.Max(1, maxDots - 1);
+                    byte colorIdx = GradientIndexForNormalized(t, height);
+                    DrawFilledCircle(raw, width, height, cx, cy, radius, colorIdx);
+                }
+            }
+        }
+
+        private static void RenderIndexedVuMeter(byte[] raw, int width, int height, float[] bars)
+        {
+            float sum = 0f;
+            for (int i = 0; i < bars.Length; i++)
+            {
+                sum += bars[i];
+            }
+            float value = bars.Length > 0 ? Math.Clamp(sum / bars.Length, 0f, 1f) : 0f;
+
+            float centerX = width * 0.5f;
+            float centerY = height * 0.82f;
+            float radius = Math.Min(width, height) * 0.62f;
+
+            // Draw VU arc (200 deg to 340 deg)
+            for (int deg = 200; deg <= 340; deg += 2)
+            {
+                double rad = deg * Math.PI / 180.0;
+                float px = centerX + (float)(Math.Cos(rad) * radius);
+                float py = centerY + (float)(Math.Sin(rad) * radius);
+                DrawFilledCircle(raw, width, height, px, py, 1.1f, IdxVuArc);
+            }
+
+            // Draw needle
+            double angleDeg = 200.0 + value * 140.0;
+            double angleRad = angleDeg * Math.PI / 180.0;
+            float needleLength = radius * 0.92f;
+            float tipX = centerX + (float)(Math.Cos(angleRad) * needleLength);
+            float tipY = centerY + (float)(Math.Sin(angleRad) * needleLength);
+            byte needleColor = GradientIndexForNormalized(value, height);
+
+            DrawThickLine(raw, width, height, (int)MathF.Round(centerX), (int)MathF.Round(centerY), (int)MathF.Round(tipX), (int)MathF.Round(tipY), 1, needleColor);
+            DrawFilledCircle(raw, width, height, centerX, centerY, Math.Max(2.5f, height * 0.045f), needleColor);
+        }
+
+        private static void RenderIndexedWaveform(byte[] raw, int width, int height, float[] waveform)
+        {
+            int stride = width + 1;
+            int midY = height / 2;
+
+            // Subtle center baseline
+            raw.AsSpan(midY * stride + 1, width).Fill(IdxVuArc);
+
+            if (waveform.Length < 2)
+            {
+                return;
+            }
+
+            int prevX = 0;
+            int prevY = Math.Clamp(midY - (int)MathF.Round(waveform[0] * midY * 0.88f), 1, height - 2);
+
+            for (int x = 1; x < width; x++)
+            {
+                float samplePos = (x / (float)(width - 1)) * (waveform.Length - 1);
+                int idx0 = (int)samplePos;
+                int idx1 = Math.Min(waveform.Length - 1, idx0 + 1);
+                float frac = samplePos - idx0;
+                float sample = waveform[idx0] + (waveform[idx1] - waveform[idx0]) * frac;
+                int y = Math.Clamp(midY - (int)MathF.Round(sample * midY * 0.88f), 1, height - 2);
+
+                byte colorIdx = GradientIndexForRow(Math.Min(y, prevY), height);
+                DrawThickLine(raw, width, height, prevX, prevY, x, y, 1, colorIdx);
+                prevX = x;
+                prevY = y;
+            }
+        }
+
+        private static void RenderIndexedStereo(
+            byte[] raw,
+            int width,
+            int height,
+            VisualizerSettings settings,
+            float left,
+            float right,
+            float peakLeft,
+            float peakRight)
+        {
+            int stride = width + 1;
+            float scale = height / 144f;
+            int margin = Math.Max(4, (int)MathF.Round(10f * scale));
+            int centerGap = Math.Max(4, (int)MathF.Round(10f * scale));
+            int barW = Math.Max(4, (width - margin * 2 - centerGap) / 2);
+            int leftX0 = margin;
+            int rightX0 = width - margin - barW;
+            int radius = Math.Min(settings.TopRadius > 0 ? Math.Max(1, (int)MathF.Round(settings.TopRadius * scale)) : 0, barW / 2);
+            int peakThick = Math.Max(1, (int)MathF.Round(settings.PeakThickness * scale));
+
+            DrawSingleStereoChannel(raw, stride, height, leftX0, barW, left, peakLeft, radius, settings.PeakHold, peakThick, scale);
+            DrawSingleStereoChannel(raw, stride, height, rightX0, barW, right, peakRight, radius, settings.PeakHold, peakThick, scale);
+
+            // Subtle L / R labels at bottom
+            int labelY = Math.Max(1, height - 9);
+            DrawChar5x7(raw, width, height, leftX0 + Math.Max(0, (barW - 5) / 2), labelY, 'L', IdxWhite);
+            DrawChar5x7(raw, width, height, rightX0 + Math.Max(0, (barW - 5) / 2), labelY, 'R', IdxWhite);
+        }
+
+        private static void DrawSingleStereoChannel(
+            byte[] raw,
+            int stride,
+            int height,
+            int x0,
+            int barW,
+            float value,
+            float peakValue,
+            int radius,
+            bool peakHold,
+            int peakThick,
+            float scale)
+        {
+            int x1 = x0 + barW;
+            int barH = Math.Clamp((int)MathF.Round(Math.Max(2f * scale, Math.Clamp(value, 0f, 1f) * height)), 1, height);
+            int y0 = height - barH;
+            int r = Math.Min(radius, barH);
+
+            for (int y = y0; y < height; y++)
+            {
+                int rx0 = x0;
+                int rx1 = x1;
+                int dy = y - y0;
+                if (r > 0 && dy < r)
+                {
+                    float cy = r - dy - 0.5f;
+                    float dx = MathF.Sqrt(Math.Max(0f, r * r - cy * cy));
+                    int inset = Math.Max(0, (int)MathF.Floor(r - dx));
+                    rx0 = Math.Min(x1 - 1, x0 + inset);
+                    rx1 = Math.Max(rx0 + 1, x1 - inset);
+                }
+
+                raw.AsSpan(y * stride + 1 + rx0, rx1 - rx0).Fill(GradientIndexForRow(y, height));
+            }
+
+            if (peakHold)
+            {
+                int peakY = Math.Clamp((int)MathF.Round(height - Math.Clamp(peakValue, 0f, 1f) * height), Math.Max(1, (int)MathF.Round(2f * scale)), height - 1);
+                int peakEndY = Math.Min(height, peakY + peakThick);
+                byte peakColorIdx = GradientIndexForNormalized(peakValue, height);
+                for (int py = peakY; py < peakEndY; py++)
+                {
+                    raw.AsSpan(py * stride + 1 + x0, barW).Fill(peakColorIdx);
+                }
+            }
+        }
+
+        private static void RenderIdleOrPauseIcon(byte[] raw, int width, int height, bool isPaused)
+        {
+            int stride = width + 1;
+            int cx = width / 2;
+            int cy = height / 2;
+
+            if (isPaused)
+            {
+                // Crisp centered Pause icon (||) inside subtle dark badge
+                int badgeW = Math.Max(22, width / 3);
+                int badgeH = Math.Max(22, height / 3);
+                int bx0 = Math.Max(0, cx - badgeW / 2);
+                int by0 = Math.Max(0, cy - badgeH / 2);
+                for (int y = by0; y < Math.Min(height, by0 + badgeH); y++)
+                {
+                    raw.AsSpan(y * stride + 1 + bx0, Math.Min(badgeW, width - bx0)).Fill(IdxOverlayBg);
+                }
+
+                int barW = Math.Max(3, badgeW / 5);
+                int barH = Math.Max(10, badgeH * 3 / 5);
+                int gap = Math.Max(3, barW);
+                int leftX = cx - gap / 2 - barW;
+                int rightX = cx + gap / 2;
+                int topY = cy - barH / 2;
+                for (int y = topY; y < Math.Min(height, topY + barH); y++)
+                {
+                    raw.AsSpan(y * stride + 1 + leftX, barW).Fill(IdxWhite);
+                    raw.AsSpan(y * stride + 1 + rightX, barW).Fill(IdxWhite);
+                }
+            }
+            else
+            {
+                // Minimal calm idle icon: three small dimmed dots in center
+                int dotR = Math.Max(2, width / 28);
+                int step = dotR * 4;
+                DrawFilledCircle(raw, width, height, cx - step, cy, dotR, IdxVuArc);
+                DrawFilledCircle(raw, width, height, cx, cy, dotR, IdxVuArc);
+                DrawFilledCircle(raw, width, height, cx + step, cy, dotR, IdxVuArc);
+            }
+        }
+
+        private static void RenderNumericOverlayIndexed(byte[] raw, int width, int height, float overallLevel)
+        {
+            double safe = Math.Max(overallLevel, 0.0001);
+            int db = (int)Math.Round(Math.Clamp(20.0 * Math.Log10(safe), -60.0, 0.0));
+
+            Span<char> chars = stackalloc char[8];
+            int len = 0;
+            if (db < 0)
+            {
+                chars[len++] = '-';
+                db = -db;
+            }
+            if (db >= 10)
+            {
+                chars[len++] = (char)('0' + (db / 10));
+            }
+            chars[len++] = (char)('0' + (db % 10));
+            chars[len++] = 'd';
+            chars[len++] = 'B';
+
+            int textW = len * 6 - 1;
+            int boxW = Math.Min(width - 2, textW + 4);
+            int boxH = Math.Min(height - 2, 11);
+            int stride = width + 1;
+
+            for (int y = 2; y < 2 + boxH; y++)
+            {
+                raw.AsSpan(y * stride + 1 + 2, boxW).Fill(IdxOverlayBg);
+            }
+
+            int x = 4;
+            for (int i = 0; i < len; i++)
+            {
+                DrawChar5x7(raw, width, height, x, 4, chars[i], IdxWhite);
+                x += 6;
+            }
+        }
+
+        private static void DrawFilledCircle(byte[] raw, int width, int height, float cx, float cy, float radius, byte colorIdx)
+        {
+            int stride = width + 1;
+            int y0 = Math.Clamp((int)MathF.Floor(cy - radius), 0, height - 1);
+            int y1 = Math.Clamp((int)MathF.Ceiling(cy + radius), 0, height - 1);
+            float r2 = radius * radius;
+
+            for (int y = y0; y <= y1; y++)
+            {
+                float dy = (y + 0.5f) - cy;
+                float rem = r2 - dy * dy;
+                if (rem < 0f)
+                {
+                    continue;
+                }
+
+                float dx = MathF.Sqrt(rem);
+                int x0 = Math.Clamp((int)MathF.Floor(cx - dx), 0, width - 1);
+                int x1 = Math.Clamp((int)MathF.Ceiling(cx + dx), x0 + 1, width);
+                raw.AsSpan(y * stride + 1 + x0, x1 - x0).Fill(colorIdx);
+            }
+        }
+
+        private static void DrawThickLine(byte[] raw, int width, int height, int x0, int y0, int x1, int y1, int radius, byte colorIdx)
+        {
+            int stride = width + 1;
+            int dx = Math.Abs(x1 - x0);
+            int dy = Math.Abs(y1 - y0);
+            int sx = x0 < x1 ? 1 : -1;
+            int sy = y0 < y1 ? 1 : -1;
+            int err = dx - dy;
+
+            while (true)
+            {
+                for (int oy = -radius; oy <= radius; oy++)
+                {
+                    int py = y0 + oy;
+                    if (py < 0 || py >= height) continue;
+                    int px0 = Math.Clamp(x0 - radius, 0, width - 1);
+                    int px1 = Math.Clamp(x0 + radius + 1, px0 + 1, width);
+                    raw.AsSpan(py * stride + 1 + px0, px1 - px0).Fill(colorIdx);
+                }
+
+                if (x0 == x1 && y0 == y1)
+                {
+                    break;
+                }
+
+                int e2 = 2 * err;
+                if (e2 > -dy)
+                {
+                    err -= dy;
+                    x0 += sx;
+                }
+                if (e2 < dx)
+                {
+                    err += dx;
+                    y0 += sy;
+                }
+            }
+        }
+
+        private static void DrawChar5x7(byte[] raw, int width, int height, int x0, int y0, char c, byte colorIdx)
+        {
+            ulong bitmap = c switch
+            {
+                '0' => 0b01110_10001_10011_10101_11001_10001_01110UL,
+                '1' => 0b00100_01100_00100_00100_00100_00100_01110UL,
+                '2' => 0b01110_10001_00001_00110_01000_10000_11111UL,
+                '3' => 0b11110_00001_00001_01110_00001_00001_11110UL,
+                '4' => 0b00010_00110_01010_10010_11111_00010_00010UL,
+                '5' => 0b11111_10000_11110_00001_00001_10001_01110UL,
+                '6' => 0b01110_10000_11110_10001_10001_10001_01110UL,
+                '7' => 0b11111_00001_00010_00100_01000_01000_01000UL,
+                '8' => 0b01110_10001_10001_01110_10001_10001_01110UL,
+                '9' => 0b01110_10001_10001_01111_00001_00010_01100UL,
+                '-' => 0b00000_00000_00000_11111_00000_00000_00000UL,
+                'd' => 0b00001_00001_01111_10001_10001_10001_01111UL,
+                'B' => 0b11110_10001_10001_11110_10001_10001_11110UL,
+                'L' => 0b10000_10000_10000_10000_10000_10000_11111UL,
+                'R' => 0b11110_10001_10001_11110_10100_10010_10001UL,
+                _ => 0UL
+            };
+
+            if (bitmap == 0UL)
+            {
+                return;
+            }
+
+            int stride = width + 1;
+            for (int row = 0; row < 7; row++)
+            {
+                int py = y0 + row;
+                if (py < 0 || py >= height) continue;
+                int shift = (6 - row) * 5;
+                int rowBits = (int)((bitmap >> shift) & 0x1F);
+                for (int col = 0; col < 5; col++)
+                {
+                    if ((rowBits & (1 << (4 - col))) != 0)
+                    {
+                        int px = x0 + col;
+                        if (px >= 0 && px < width)
+                        {
+                            raw[py * stride + 1 + px] = colorIdx;
+                        }
+                    }
+                }
+            }
+        }
+
+        private static void WriteRgb(byte[] paletteRgb, int index, Color c)
+        {
+            int o = index * 3;
+            paletteRgb[o] = c.R;
+            paletteRgb[o + 1] = c.G;
+            paletteRgb[o + 2] = c.B;
+        }
+
+        private static int WritePngChunk(byte[] dst, int pos, byte[] chunkType, ReadOnlySpan<byte> data)
+        {
+            BinaryPrimitives.WriteInt32BigEndian(dst.AsSpan(pos, 4), data.Length);
+            pos += 4;
+            Buffer.BlockCopy(chunkType, 0, dst, pos, 4);
+            pos += 4;
+            data.CopyTo(dst.AsSpan(pos, data.Length));
+            pos += data.Length;
+
+            uint crc = UpdateCrc(0xFFFFFFFFu, chunkType);
+            crc = UpdateCrc(crc, data) ^ 0xFFFFFFFFu;
+            BinaryPrimitives.WriteUInt32BigEndian(dst.AsSpan(pos, 4), crc);
+            pos += 4;
+            return pos;
+        }
+
+        private static ArraySegment<byte> EncodeIndexedPng(byte[] header, byte[] rawScanlines, MemoryStream zlibBuffer, MemoryStream pngStream)
+        {
+            zlibBuffer.SetLength(0);
+            using (var z = new ZLibStream(zlibBuffer, CompressionLevel.Fastest, leaveOpen: true))
+            {
+                z.Write(rawScanlines, 0, rawScanlines.Length);
+            }
+
+            int idatLen = (int)zlibBuffer.Length;
+            byte[] idatRaw = zlibBuffer.GetBuffer();
+            ReadOnlySpan<byte> idatSpan = idatRaw.AsSpan(0, idatLen);
+
+            pngStream.SetLength(0);
+            pngStream.Write(header, 0, header.Length);
+
+            Span<byte> lenAndType = stackalloc byte[8];
+            BinaryPrimitives.WriteInt32BigEndian(lenAndType.Slice(0, 4), idatLen);
+            ChunkTypeIdat.CopyTo(lenAndType.Slice(4, 4));
+            pngStream.Write(lenAndType);
+            pngStream.Write(idatSpan);
+
+            uint crc = UpdateCrc(0xFFFFFFFFu, ChunkTypeIdat);
+            crc = UpdateCrc(crc, idatSpan) ^ 0xFFFFFFFFu;
+            Span<byte> crcBytes = stackalloc byte[4];
+            BinaryPrimitives.WriteUInt32BigEndian(crcBytes, crc);
+            pngStream.Write(crcBytes);
+
+            pngStream.Write(PngIendChunk, 0, PngIendChunk.Length);
+            return new ArraySegment<byte>(pngStream.GetBuffer(), 0, (int)pngStream.Length);
+        }
+
+        private static uint[] BuildCrc32Table()
+        {
+            var table = new uint[256];
+            for (uint n = 0; n < 256; n++)
+            {
+                uint c = n;
+                for (int k = 0; k < 8; k++)
+                {
+                    c = (c & 1) != 0 ? (0xEDB88320u ^ (c >> 1)) : (c >> 1);
+                }
+                table[n] = c;
+            }
+            return table;
+        }
+
+        private static uint UpdateCrc(uint crc, ReadOnlySpan<byte> data)
+        {
+            for (int i = 0; i < data.Length; i++)
+            {
+                crc = CrcTable[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
+            }
+            return crc;
+        }
+
+        private static Color ParseColor(string hex)
+        {
+            return ColorTranslator.FromHtml(string.IsNullOrWhiteSpace(hex) ? "#000000" : hex);
+        }
+
+        private static Color InterpolateColor(IReadOnlyList<GradientStop> stops, float t)
+        {
+            int count = stops.Count;
+            if (count == 0)
+            {
+                return Color.White;
+            }
+
+            GradientStop? bestBefore = null;
+            GradientStop? bestAfter = null;
+            GradientStop? minStop = null;
+            GradientStop? maxStop = null;
+
+            for (int i = 0; i < count; i++)
+            {
+                var s = stops[i];
+                if (minStop == null || s.Pos < minStop.Pos) minStop = s;
+                if (maxStop == null || s.Pos > maxStop.Pos) maxStop = s;
+                if (s.Pos <= t && (bestBefore == null || s.Pos > bestBefore.Pos)) bestBefore = s;
+                if (s.Pos >= t && (bestAfter == null || s.Pos < bestAfter.Pos)) bestAfter = s;
+            }
+
+            if (bestBefore == null)
+            {
+                return ParseColor(minStop!.Color);
+            }
+
+            if (bestAfter == null)
+            {
+                return ParseColor(maxStop!.Color);
+            }
+
+            if (bestBefore == bestAfter || Math.Abs(bestAfter.Pos - bestBefore.Pos) < 1e-6)
+            {
+                return ParseColor(bestBefore.Color);
+            }
+
+            float local = (float)((t - bestBefore.Pos) / (bestAfter.Pos - bestBefore.Pos));
+            return Blend(ParseColor(bestBefore.Color), ParseColor(bestAfter.Color), local);
+        }
+
+        private static Color Blend(Color a, Color b, float t)
+        {
+            int r = (int)Math.Round(a.R + (b.R - a.R) * t);
+            int g = (int)Math.Round(a.G + (b.G - a.G) * t);
+            int bl = (int)Math.Round(a.B + (b.B - a.B) * t);
+            return Color.FromArgb(255, r, g, bl);
+        }
+    }
+}
