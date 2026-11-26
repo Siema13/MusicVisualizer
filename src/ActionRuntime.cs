@@ -45,6 +45,7 @@ namespace MusicVisualizerLoopback
         public float StereoPeakLeft { get; set; }
         public float StereoPeakRight { get; set; }
         public float BeatPulseLevel { get; set; }
+        public float BeatBassBaseline { get; set; }
         public bool IsIdleState { get; set; }
         public long LastSmoothedSnapshotVersion { get; set; } = -1;
 
@@ -217,7 +218,7 @@ namespace MusicVisualizerLoopback
 
             if (settings.BeatPulseEnabled)
             {
-                int pulseLevel = BeatPulseLevel > 0.65f ? 3 : (BeatPulseLevel > 0.35f ? 2 : (BeatPulseLevel > 0.12f ? 1 : 0));
+                int pulseLevel = Math.Clamp((int)MathF.Round(BeatPulseLevel * 7f), 0, 7);
                 hash.Add(pulseLevel);
             }
 

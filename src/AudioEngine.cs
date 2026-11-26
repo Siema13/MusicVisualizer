@@ -198,13 +198,23 @@ namespace MusicVisualizerLoopback
             Array.Copy(_fftInput, _fftWriteIndex, _fftWindow, 0, tail);
             Array.Copy(_fftInput, 0, _fftWindow, tail, _fftWriteIndex);
 
-            // Capture latest 512 samples downsampled to WaveformPoints (128) for oscilloscope mode
-            int waveWindow = Math.Min(512, _fftSize);
-            int waveStart = _fftSize - waveWindow;
-            int step = Math.Max(1, waveWindow / WaveformPoints);
+            // Capture a phase-stabilized waveform slice (rising zero-crossing trigger) so oscilloscope flows smoothly
+            int waveSpan = 256;
+            int searchSpan = Math.Min(256, _fftSize - waveSpan - 1);
+            int searchStart = Math.Max(1, _fftSize - waveSpan - searchSpan);
+            int triggerPos = _fftSize - waveSpan;
+            for (int i = searchStart; i < searchStart + searchSpan; i++)
+            {
+                if (_fftWindow[i - 1] <= 0f && _fftWindow[i] > 0f)
+                {
+                    triggerPos = i;
+                    break;
+                }
+            }
+
             for (int i = 0; i < WaveformPoints; i++)
             {
-                int idx = waveStart + i * step;
+                int idx = triggerPos + (i * waveSpan) / WaveformPoints;
                 _waveformBuffer[i] = idx < _fftSize ? _fftWindow[idx] : 0f;
             }
 

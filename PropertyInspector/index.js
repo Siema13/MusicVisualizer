@@ -286,6 +286,7 @@ function loadUiFromSettings(s) {
   updateGradientPreview();
 
   setFreqPresetUi(detectPreset(s.freqPreset, s.freqMin, s.freqMax), s.freqMin, s.freqMax);
+  updateSpanRangeHint(s);
 
   hideError();
 }
@@ -355,6 +356,26 @@ function setFreqPresetUi(preset, customMin, customMax) {
     minEl.value = String(customMin ?? 20);
     maxEl.value = String(customMax ?? 20000);
   }
+}
+
+function updateSpanRangeHint(s) {
+  const hint = document.getElementById("spanRangeHint");
+  if (!hint) return;
+  const count = clampInt(s.spanCount, 1, 6, 1);
+  const idx = clampInt(s.spanIndex, 1, count, 1);
+  if (count <= 1) {
+    hint.classList.add("hidden");
+    return;
+  }
+  const minHz = Math.max(20, s.freqMin || 20);
+  const maxHz = Math.max(minHz + 1, s.freqMax || 20000);
+  const logMin = Math.log10(minHz);
+  const logSpan = Math.log10(maxHz) - logMin;
+  const sliceMin = Math.round(Math.pow(10, logMin + ((idx - 1) / count) * logSpan));
+  const sliceMax = Math.round(Math.pow(10, logMin + (idx / count) * logSpan));
+  const fmt = (hz) => hz >= 1000 ? (hz / 1000).toFixed(1) + " kHz" : hz + " Hz";
+  hint.textContent = "Ten kafelek (" + idx + "/" + count + "): " + fmt(sliceMin) + " – " + fmt(sliceMax) + ". Ustaw ten sam zakres (np. Full) na wszystkich " + count + " przyciskach i wybierz kolejne pozycje 1/" + count + " … " + count + "/" + count + ".";
+  hint.classList.remove("hidden");
 }
 
 function updateSpanIndexOptions(spanCount, selectedIndex) {
@@ -439,6 +460,7 @@ function previewSettings() {
   const preview = collectSettingsFromUi();
   settings = preview;
   renderLedPreview(preview);
+  updateSpanRangeHint(preview);
   sendToPlugin({ event: "previewSettings", settings: preview });
 }
 

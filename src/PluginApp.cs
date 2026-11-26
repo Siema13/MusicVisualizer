@@ -1119,11 +1119,12 @@ namespace MusicVisualizerLoopback
                 }
             }
 
-            // Update stereo L/R levels using the same dB calibration & ballistics
+            // Update stereo L/R levels (time-domain RMS is full-band, ~16 dB hotter than single FFT bins)
             double minDb = settings.MinDb;
             double invDbRange = 1.0 / Math.Max(6.0, -minDb);
-            float rawLeft = MapLinearLevelToNorm(snapshot.RmsLeft, settings.GainDb, settings.NoiseGateDb, minDb, invDbRange, settings.Gamma);
-            float rawRight = MapLinearLevelToNorm(snapshot.RmsRight, settings.GainDb, settings.NoiseGateDb, minDb, invDbRange, settings.Gamma);
+            double timeDomainGainDb = settings.GainDb - 16.0;
+            float rawLeft = MapLinearLevelToNorm(snapshot.RmsLeft, timeDomainGainDb, settings.NoiseGateDb, minDb, invDbRange, settings.Gamma);
+            float rawRight = MapLinearLevelToNorm(snapshot.RmsRight, timeDomainGainDb, settings.NoiseGateDb, minDb, invDbRange, settings.Gamma);
             runtime.StereoLeft = ApplyBallistic(runtime.StereoLeft, rawLeft, rise, fall);
             runtime.StereoRight = ApplyBallistic(runtime.StereoRight, rawRight, rise, fall);
             runtime.StereoPeakLeft = settings.PeakHold ? Math.Max(runtime.StereoLeft, Math.Max(0f, runtime.StereoPeakLeft - peakFallStep)) : 0f;
@@ -1131,30 +1132,40 @@ namespace MusicVisualizerLoopback
             if (runtime.StereoPeakLeft < 0.0005f) runtime.StereoPeakLeft = 0f;
             if (runtime.StereoPeakRight < 0.0005f) runtime.StereoPeakRight = 0f;
 
-            // Update waveform slice for oscilloscope mode (scaled gently by GainDb)
+            // Update waveform slice for oscilloscope mode (calibrated to time-domain amplitude + gentle temporal smoothing)
             if (settings.RenderMode == "waveform")
             {
-                float gainLin = (float)Math.Clamp(Math.Pow(10.0, settings.GainDb / 20.0) * 0.45, 0.25, 6.0);
+                float gainLin = (float)Math.Clamp(Math.Pow(10.0, timeDomainGainDb / 20.0) * 1.4, 0.5, 4.0);
                 var srcWave = snapshot.Waveform;
                 int wLen = Math.Min(runtime.Waveform.Length, srcWave.Length);
                 for (int i = 0; i < wLen; i++)
                 {
-                    float s = Math.Clamp(srcWave[i] * gainLin, -1f, 1f);
-                    runtime.Waveform[i] = s;
-                    if (MathF.Abs(s) > 0.005f)
+                    float target = Math.Clamp(srcWave[i] * gainLin, -1f, 1f);
+                    float blended = runtime.Waveform[i] + (target - runtime.Waveform[i]) * 0.65f;
+                    if (MathF.Abs(target) < 0.002f && MathF.Abs(blended) < 0.003f)
+                    {
+                        blended = 0f;
+                    }
+                    runtime.Waveform[i] = blended;
+                    if (MathF.Abs(blended) > 0.005f)
                     {
                         anyActive = true;
                     }
                 }
             }
 
-            // Update Beat Pulse (20-120 Hz bass energy)
+            // Update Beat Pulse (20-120 Hz bass transient detector for rhythmic pulsing background)
             if (settings.BeatPulseEnabled)
             {
                 float rawBass = MapLinearLevelToNorm(snapshot.BassEnergy, settings.GainDb, settings.NoiseGateDb, minDb, invDbRange, settings.Gamma);
-                float nextPulse = rawBass > runtime.BeatPulseLevel
-                    ? runtime.BeatPulseLevel + (rawBass - runtime.BeatPulseLevel) * Math.Min(1f, rise * 1.15f)
-                    : runtime.BeatPulseLevel + (rawBass - runtime.BeatPulseLevel) * Math.Min(1f, fall * 1.35f);
+                float baseTrack = 1f - MathF.Pow(1f - 0.08f, stepRatio);
+                runtime.BeatBassBaseline += (rawBass - runtime.BeatBassBaseline) * baseTrack;
+                float transient = Math.Clamp((rawBass - runtime.BeatBassBaseline) * 2.6f + rawBass * 0.28f, 0f, 1f);
+                float pulseRise = 1f - MathF.Pow(1f - 0.78f, stepRatio);
+                float pulseFall = 1f - MathF.Pow(1f - 0.18f, stepRatio);
+                float nextPulse = transient > runtime.BeatPulseLevel
+                    ? runtime.BeatPulseLevel + (transient - runtime.BeatPulseLevel) * pulseRise
+                    : runtime.BeatPulseLevel + (transient - runtime.BeatPulseLevel) * pulseFall;
                 if (rawBass <= 0f && nextPulse < 0.005f) nextPulse = 0f;
                 runtime.BeatPulseLevel = Math.Clamp(nextPulse, 0f, 1f);
                 if (runtime.BeatPulseLevel > 0.05f)
@@ -1165,6 +1176,7 @@ namespace MusicVisualizerLoopback
             else
             {
                 runtime.BeatPulseLevel = 0f;
+                runtime.BeatBassBaseline = 0f;
             }
 
             if (settings.RenderMode == "stereo" && (runtime.StereoLeft > 0f || runtime.StereoRight > 0f || runtime.StereoPeakLeft > 0f || runtime.StereoPeakRight > 0f))

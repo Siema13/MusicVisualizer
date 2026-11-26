@@ -18,19 +18,17 @@ namespace MusicVisualizerLoopback
         private static readonly byte[] PngIendChunk = { 0x00, 0x00, 0x00, 0x00, (byte)'I', (byte)'E', (byte)'N', (byte)'D', 0xAE, 0x42, 0x60, 0x82 };
         private static readonly uint[] CrcTable = BuildCrc32Table();
 
-        // Fixed high palette indices (valid for all render heights <= 240 px; 255 total palette entries)
+        // Fixed high palette indices (valid for all render heights <= 238 px; 255 total palette entries)
         private const int PaletteSize = 255;
         private const byte IdxBg = 0;
         private const byte IdxLedLow = 1;
         private const byte IdxLedMid = 2;
         private const byte IdxLedHigh = 3;
+        private const byte IdxPulseBase = 240; // 240..247: 8 smooth pulsing background levels
         private const byte IdxBlack = 248;
         private const byte IdxOverlayBg = 249;
         private const byte IdxWhite = 250;
         private const byte IdxVuArc = 251;
-        private const byte IdxPulse1 = 252;
-        private const byte IdxPulse2 = 253;
-        private const byte IdxPulse3 = 254;
 
         private sealed class RenderScratch : IDisposable
         {
@@ -87,10 +85,10 @@ namespace MusicVisualizerLoopback
             byte[] raw = scratch.IndexedScanlines;
             Array.Clear(raw, 0, raw.Length);
 
-            // Optional Beat Pulse reactive frame/border on bass hits
-            if (settings.BeatPulseEnabled && !settings.Paused && runtime.BeatPulseLevel > 0.12f)
+            // Optional Beat Pulse full pulsing background on bass hits
+            if (settings.BeatPulseEnabled && !settings.Paused && runtime.BeatPulseLevel > 0.05f)
             {
-                RenderBeatPulseFrame(raw, width, height, runtime.BeatPulseLevel);
+                RenderBeatPulseBackground(raw, width, height, runtime.BeatPulseLevel);
             }
 
             // Render selected visualization mode (all 7 modes on zero-GC 8-bit indexed PNG path)
@@ -163,7 +161,7 @@ namespace MusicVisualizerLoopback
             }
             else
             {
-                int gradCount = Math.Min(height, 240);
+                int gradCount = Math.Min(height, 238);
                 float denom = Math.Max(1, gradCount - 1);
                 for (int y = 0; y < gradCount; y++)
                 {
@@ -173,13 +171,17 @@ namespace MusicVisualizerLoopback
                 }
             }
 
+            // 8 smooth pulsing background levels (0% -> 46% blend toward accent)
+            for (int p = 0; p < 8; p++)
+            {
+                float blend = (p / 7f) * 0.46f;
+                WriteRgb(paletteRgb, IdxPulseBase + p, Blend(bg, accent, blend));
+            }
+
             WriteRgb(paletteRgb, IdxBlack, Color.Black);
             WriteRgb(paletteRgb, IdxOverlayBg, Blend(bg, Color.Black, 0.65f));
             WriteRgb(paletteRgb, IdxWhite, Color.White);
             WriteRgb(paletteRgb, IdxVuArc, Blend(bg, Color.White, 0.35f));
-            WriteRgb(paletteRgb, IdxPulse1, Blend(bg, accent, 0.28f));
-            WriteRgb(paletteRgb, IdxPulse2, Blend(bg, accent, 0.55f));
-            WriteRgb(paletteRgb, IdxPulse3, Blend(bg, accent, 0.85f));
 
             // Signature (8) + IHDR chunk (25) + PLTE chunk (12 + paletteRgb.Length)
             byte[] header = new byte[8 + 25 + 12 + paletteRgb.Length];
@@ -210,8 +212,8 @@ namespace MusicVisualizerLoopback
 
         private static byte GradientIndexForRow(int y, int height)
         {
-            int maxGrad = Math.Min(height, 240);
-            if (height <= 240)
+            int maxGrad = Math.Min(height, 238);
+            if (height <= 238)
             {
                 return (byte)(1 + Math.Clamp(y, 0, maxGrad - 1));
             }
@@ -220,25 +222,23 @@ namespace MusicVisualizerLoopback
 
         private static byte GradientIndexForNormalized(float t, int height)
         {
-            int maxGrad = Math.Min(height, 240);
+            int maxGrad = Math.Min(height, 238);
             int idx = (int)MathF.Round((1f - Math.Clamp(t, 0f, 1f)) * (maxGrad - 1));
             return (byte)(1 + Math.Clamp(idx, 0, maxGrad - 1));
         }
 
-        private static void RenderBeatPulseFrame(byte[] raw, int width, int height, float beatLevel)
+        private static void RenderBeatPulseBackground(byte[] raw, int width, int height, float beatLevel)
         {
-            byte borderIdx = beatLevel > 0.65f ? IdxPulse3 : (beatLevel > 0.35f ? IdxPulse2 : IdxPulse1);
-            int thickness = beatLevel > 0.65f ? 2 : 1;
             int stride = width + 1;
-
-            for (int t = 0; t < thickness && t < height / 2 && t < width / 2; t++)
+            float clamped = Math.Clamp(beatLevel, 0f, 1f);
+            for (int y = 0; y < height; y++)
             {
-                raw.AsSpan(t * stride + 1 + t, width - t * 2).Fill(borderIdx);
-                raw.AsSpan((height - 1 - t) * stride + 1 + t, width - t * 2).Fill(borderIdx);
-                for (int y = t; y < height - t; y++)
+                // Subtle bottom-to-top ambient glow: strongest near bottom, gently softer near top
+                float verticalFactor = 0.55f + 0.45f * (y / (float)Math.Max(1, height - 1));
+                int level = Math.Clamp((int)MathF.Round(clamped * verticalFactor * 7f), 0, 7);
+                if (level > 0)
                 {
-                    raw[y * stride + 1 + t] = borderIdx;
-                    raw[y * stride + 1 + (width - 1 - t)] = borderIdx;
+                    raw.AsSpan(y * stride + 1, width).Fill((byte)(IdxPulseBase + level));
                 }
             }
         }
@@ -494,8 +494,7 @@ namespace MusicVisualizerLoopback
                 return;
             }
 
-            int prevX = 0;
-            int prevY = Math.Clamp(midY - (int)MathF.Round(waveform[0] * midY * 0.88f), 1, height - 2);
+            int prevY = Math.Clamp(midY - (int)MathF.Round(waveform[0] * midY * 0.82f), 1, height - 2);
 
             for (int x = 1; x < width; x++)
             {
@@ -504,11 +503,19 @@ namespace MusicVisualizerLoopback
                 int idx1 = Math.Min(waveform.Length - 1, idx0 + 1);
                 float frac = samplePos - idx0;
                 float sample = waveform[idx0] + (waveform[idx1] - waveform[idx0]) * frac;
-                int y = Math.Clamp(midY - (int)MathF.Round(sample * midY * 0.88f), 1, height - 2);
+                int y = Math.Clamp(midY - (int)MathF.Round(sample * midY * 0.82f), 1, height - 2);
 
-                byte colorIdx = GradientIndexForRow(Math.Min(y, prevY), height);
-                DrawThickLine(raw, width, height, prevX, prevY, x, y, 1, colorIdx);
-                prevX = x;
+                int yMin = Math.Min(prevY, y);
+                int yMax = Math.Max(prevY, y);
+                byte colorIdx = GradientIndexForRow(yMin, height);
+                for (int py = yMin; py <= yMax; py++)
+                {
+                    raw[py * stride + 1 + x] = colorIdx;
+                    if (py + 1 < height)
+                    {
+                        raw[(py + 1) * stride + 1 + x] = colorIdx;
+                    }
+                }
                 prevY = y;
             }
         }
