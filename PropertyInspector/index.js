@@ -146,7 +146,18 @@ function handlePropertyInspectorEvent(payload) {
     case "exportSettings":
       downloadSettingsAsFile(payload.settings || settings);
       break;
+    case "styleSynced":
+      showSyncStyleStatus(payload.count || 0);
+      break;
   }
+}
+
+function showSyncStyleStatus(count) {
+  const el = document.getElementById("syncStyleStatus");
+  if (!el) return;
+  el.textContent = "Zsynchronizowano styl na " + count + " kafelkach.";
+  el.classList.remove("hidden");
+  setTimeout(() => el.classList.add("hidden"), 2500);
 }
 
 function normalizeSettings(input) {
@@ -1068,6 +1079,15 @@ function initUi() {
 
   const addStopBtn = document.getElementById("addStopBtn");
   if (addStopBtn) addStopBtn.addEventListener("click", () => addGradientStop());
+
+  const syncStyleBtn = document.getElementById("syncStyleBtn");
+  if (syncStyleBtn) {
+    syncStyleBtn.addEventListener("click", () => {
+      const current = collectSettingsFromUi();
+      saveSettings();
+      sendToPlugin({ event: "syncStyleToAll", settings: current });
+    });
+  }
 }
 
 document.addEventListener("DOMContentLoaded", () => {

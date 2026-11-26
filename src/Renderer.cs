@@ -107,7 +107,7 @@ namespace MusicVisualizerLoopback
                     RenderIndexedVuMeter(raw, width, height, runtime.Bars);
                     break;
                 case "waveform":
-                    RenderIndexedWaveform(raw, width, height, runtime.Waveform);
+                    RenderIndexedWaveform(raw, width, height, settings, runtime.Waveform);
                     break;
                 case "stereo":
                     RenderIndexedStereo(raw, width, height, settings, runtime.StereoLeft, runtime.StereoRight, runtime.StereoPeakLeft, runtime.StereoPeakRight);
@@ -481,7 +481,7 @@ namespace MusicVisualizerLoopback
             DrawFilledCircle(raw, width, height, centerX, centerY, Math.Max(2.5f, height * 0.045f), needleColor);
         }
 
-        private static void RenderIndexedWaveform(byte[] raw, int width, int height, float[] waveform)
+        private static void RenderIndexedWaveform(byte[] raw, int width, int height, VisualizerSettings settings, float[] waveform)
         {
             int stride = width + 1;
             int midY = height / 2;
@@ -494,17 +494,30 @@ namespace MusicVisualizerLoopback
                 return;
             }
 
-            int prevY = Math.Clamp(midY - (int)MathF.Round(waveform[0] * midY * 0.82f), 1, height - 2);
+            // Multi-Key Span: slice the waveform continuously across SpanCount buttons
+            int spanCount = Math.Clamp(settings.SpanCount, 1, 6);
+            int spanIndex = Math.Clamp(settings.SpanIndex, 1, spanCount);
+            float sliceStart = ((spanIndex - 1) / (float)spanCount) * (waveform.Length - 1);
+            float sliceEnd = (spanIndex / (float)spanCount) * (waveform.Length - 1);
+            float sliceSpan = Math.Max(1f, sliceEnd - sliceStart);
+            byte fillIdx = (byte)(IdxPulseBase + 2);
 
-            for (int x = 1; x < width; x++)
+            int prevY = SampleWaveY(waveform, sliceStart, midY, height);
+
+            for (int x = 0; x < width; x++)
             {
-                float samplePos = (x / (float)(width - 1)) * (waveform.Length - 1);
-                int idx0 = (int)samplePos;
-                int idx1 = Math.Min(waveform.Length - 1, idx0 + 1);
-                float frac = samplePos - idx0;
-                float sample = waveform[idx0] + (waveform[idx1] - waveform[idx0]) * frac;
-                int y = Math.Clamp(midY - (int)MathF.Round(sample * midY * 0.82f), 1, height - 2);
+                float samplePos = sliceStart + (x / (float)Math.Max(1, width - 1)) * sliceSpan;
+                int y = SampleWaveY(waveform, samplePos, midY, height);
 
+                // Soft filled area between center baseline and wave curve
+                int fillTop = Math.Min(midY, y);
+                int fillBot = Math.Max(midY, y);
+                for (int fy = fillTop; fy <= fillBot; fy++)
+                {
+                    raw[fy * stride + 1 + x] = fillIdx;
+                }
+
+                // Bright 2-px wave trace on top
                 int yMin = Math.Min(prevY, y);
                 int yMax = Math.Max(prevY, y);
                 byte colorIdx = GradientIndexForRow(yMin, height);
@@ -520,6 +533,15 @@ namespace MusicVisualizerLoopback
             }
         }
 
+        private static int SampleWaveY(float[] waveform, float samplePos, int midY, int height)
+        {
+            int idx0 = Math.Clamp((int)samplePos, 0, waveform.Length - 1);
+            int idx1 = Math.Min(waveform.Length - 1, idx0 + 1);
+            float frac = samplePos - idx0;
+            float sample = waveform[idx0] + (waveform[idx1] - waveform[idx0]) * frac;
+            return Math.Clamp(midY - (int)MathF.Round(sample * midY * 0.82f), 1, height - 2);
+        }
+
         private static void RenderIndexedStereo(
             byte[] raw,
             int width,
@@ -533,18 +555,53 @@ namespace MusicVisualizerLoopback
             int stride = width + 1;
             float scale = height / 144f;
             int margin = Math.Max(4, (int)MathF.Round(10f * scale));
+            int peakThick = Math.Max(1, (int)MathF.Round(settings.PeakThickness * scale));
+            int spanCount = Math.Clamp(settings.SpanCount, 1, 6);
+            int spanIndex = Math.Clamp(settings.SpanIndex, 1, spanCount);
+            int labelY = Math.Max(1, height - 9);
+
+            // Multi-Key Stereo: 2 keys => [L | R], 3 keys => [L | M | R]
+            if (spanCount == 2 || spanCount == 3)
+            {
+                int singleW = Math.Max(8, width - margin * 2);
+                int radius = Math.Min(settings.TopRadius > 0 ? Math.Max(1, (int)MathF.Round(settings.TopRadius * scale)) : 0, singleW / 2);
+                float val;
+                float peak;
+                char label;
+
+                if (spanIndex == 1)
+                {
+                    val = left;
+                    peak = peakLeft;
+                    label = 'L';
+                }
+                else if (spanCount == 3 && spanIndex == 2)
+                {
+                    val = (left + right) * 0.5f;
+                    peak = (peakLeft + peakRight) * 0.5f;
+                    label = 'M';
+                }
+                else
+                {
+                    val = right;
+                    peak = peakRight;
+                    label = 'R';
+                }
+
+                DrawSingleStereoChannel(raw, stride, height, margin, singleW, val, peak, radius, settings.PeakHold, peakThick, scale);
+                DrawChar5x7(raw, width, height, margin + Math.Max(0, (singleW - 5) / 2), labelY, label, IdxWhite);
+                return;
+            }
+
             int centerGap = Math.Max(4, (int)MathF.Round(10f * scale));
             int barW = Math.Max(4, (width - margin * 2 - centerGap) / 2);
             int leftX0 = margin;
             int rightX0 = width - margin - barW;
-            int radius = Math.Min(settings.TopRadius > 0 ? Math.Max(1, (int)MathF.Round(settings.TopRadius * scale)) : 0, barW / 2);
-            int peakThick = Math.Max(1, (int)MathF.Round(settings.PeakThickness * scale));
+            int dualRadius = Math.Min(settings.TopRadius > 0 ? Math.Max(1, (int)MathF.Round(settings.TopRadius * scale)) : 0, barW / 2);
 
-            DrawSingleStereoChannel(raw, stride, height, leftX0, barW, left, peakLeft, radius, settings.PeakHold, peakThick, scale);
-            DrawSingleStereoChannel(raw, stride, height, rightX0, barW, right, peakRight, radius, settings.PeakHold, peakThick, scale);
+            DrawSingleStereoChannel(raw, stride, height, leftX0, barW, left, peakLeft, dualRadius, settings.PeakHold, peakThick, scale);
+            DrawSingleStereoChannel(raw, stride, height, rightX0, barW, right, peakRight, dualRadius, settings.PeakHold, peakThick, scale);
 
-            // Subtle L / R labels at bottom
-            int labelY = Math.Max(1, height - 9);
             DrawChar5x7(raw, width, height, leftX0 + Math.Max(0, (barW - 5) / 2), labelY, 'L', IdxWhite);
             DrawChar5x7(raw, width, height, rightX0 + Math.Max(0, (barW - 5) / 2), labelY, 'R', IdxWhite);
         }
@@ -755,6 +812,7 @@ namespace MusicVisualizerLoopback
                 'd' => 0b00001_00001_01111_10001_10001_10001_01111UL,
                 'B' => 0b11110_10001_10001_11110_10001_10001_11110UL,
                 'L' => 0b10000_10000_10000_10000_10000_10000_11111UL,
+                'M' => 0b10001_11011_10101_10101_10001_10001_10001UL,
                 'R' => 0b11110_10001_10001_11110_10100_10010_10001UL,
                 _ => 0UL
             };

@@ -633,6 +633,54 @@ namespace MusicVisualizerLoopback
                         await EnsureAudioAsync(cancellationToken);
                     }
                     break;
+
+                case "syncStyleToAll":
+                    if (payload.TryGetProperty("settings", out var styleSourceElem))
+                    {
+                        var src = DeserializeSettings(styleSourceElem, runtime.GetSettingsSnapshot().Clone());
+                        SettingsNormalizer.Normalize(src);
+                        int syncedCount = 0;
+
+                        foreach (var targetRuntime in _actions.Values.ToArray())
+                        {
+                            var updated = targetRuntime.QueueLongPressTransform(dst =>
+                            {
+                                dst.RenderMode = src.RenderMode;
+                                dst.BgColor = src.BgColor;
+                                dst.GradientStops = src.GradientStops.Select(g => g.Clone()).ToList();
+                                dst.TopRadius = src.TopRadius;
+                                dst.PeakHold = src.PeakHold;
+                                dst.PeakFallSpeed = src.PeakFallSpeed;
+                                dst.PeakThickness = src.PeakThickness;
+                                dst.DotSpacing = src.DotSpacing;
+                                dst.ShowNumericMeter = src.ShowNumericMeter;
+                                dst.BeatPulseEnabled = src.BeatPulseEnabled;
+                                dst.IdleIconEnabled = src.IdleIconEnabled;
+                                dst.AttackSpeed = src.AttackSpeed;
+                                dst.ReleaseSpeed = src.ReleaseSpeed;
+                                dst.Smoothing = src.Smoothing;
+                                dst.LedSegmentMode = src.LedSegmentMode;
+                                dst.LedSegmentCount = src.LedSegmentCount;
+                                dst.LedSegmentSizePx = src.LedSegmentSizePx;
+                                dst.LedSegmentGapPx = src.LedSegmentGapPx;
+                                dst.LedLowColor = src.LedLowColor;
+                                dst.LedMidColor = src.LedMidColor;
+                                dst.LedHighColor = src.LedHighColor;
+                                dst.LedLowThreshold = src.LedLowThreshold;
+                                dst.LedHighThreshold = src.LedHighThreshold;
+                            });
+                            await SaveSettingsAsync(targetRuntime.Context, updated, cancellationToken);
+                            syncedCount++;
+                        }
+
+                        SignalRenderWake();
+                        await SendToPropertyInspectorAsync(runtime.Context, new
+                        {
+                            @event = "styleSynced",
+                            count = syncedCount
+                        }, cancellationToken);
+                    }
+                    break;
             }
         }
 
@@ -670,45 +718,68 @@ namespace MusicVisualizerLoopback
                 : 0;
             runtime.KeyPressStopwatch.Reset();
 
-            VisualizerSettings? savedSettings = null;
+            var updatedTargets = new List<(ActionRuntime Target, VisualizerSettings Saved)>();
+            var currentSnap = runtime.GetSettingsSnapshot();
 
             if (elapsedMs >= LongPressThresholdMs)
             {
-                string longAction = runtime.GetSettingsSnapshot().LongPressAction;
+                string longAction = currentSnap.LongPressAction;
+                bool syncMultiKey = currentSnap.SpanCount > 1;
+                var targets = syncMultiKey
+                    ? _actions.Values.Where(a => a.GetSettingsSnapshot().SpanCount > 1).ToArray()
+                    : new[] { runtime };
+
                 if (longAction == "cycleRenderMode")
                 {
-                    savedSettings = runtime.QueueLongPressTransform(s =>
+                    string nextMode = BuiltInPresets.NextRenderMode(currentSnap.RenderMode);
+                    foreach (var target in targets)
                     {
-                        s.RenderMode = BuiltInPresets.NextRenderMode(s.RenderMode);
-                    });
+                        var saved = target.QueueLongPressTransform(s => s.RenderMode = nextMode);
+                        updatedTargets.Add((target, saved));
+                    }
                 }
                 else if (longAction == "cycleGradientPreset")
                 {
-                    savedSettings = runtime.QueueLongPressTransform(s =>
+                    var nextStops = BuiltInPresets.NextGradientPreset(currentSnap.GradientStops);
+                    foreach (var target in targets)
                     {
-                        s.GradientStops = BuiltInPresets.NextGradientPreset(s.GradientStops);
-                    });
+                        var saved = target.QueueLongPressTransform(s =>
+                        {
+                            s.GradientStops = nextStops.Select(g => g.Clone()).ToList();
+                        });
+                        updatedTargets.Add((target, saved));
+                    }
                 }
                 else if (longAction == "togglePause")
                 {
-                    savedSettings = runtime.QueueManualPauseToggle();
-                    runtime.ManualPauseOverride = true;
+                    bool nextPaused = !currentSnap.Paused;
+                    foreach (var target in targets)
+                    {
+                        var saved = target.QueueManualPause(nextPaused);
+                        target.ManualPauseOverride = true;
+                        updatedTargets.Add((target, saved));
+                    }
                 }
             }
             else
             {
-                savedSettings = runtime.QueueManualPauseToggle();
+                var saved = runtime.QueueManualPauseToggle();
                 runtime.ManualPauseOverride = true;
+                updatedTargets.Add((runtime, saved));
             }
 
-            if (savedSettings != null)
+            if (updatedTargets.Count > 0)
             {
                 SignalRenderWake();
-                await SaveSettingsAsync(runtime.Context, savedSettings, cancellationToken);
+                foreach (var (target, saved) in updatedTargets)
+                {
+                    await SaveSettingsAsync(target.Context, saved, cancellationToken);
+                }
+                var primarySaved = updatedTargets.FirstOrDefault(x => x.Target.Context == runtime.Context).Saved ?? updatedTargets[0].Saved;
                 await SendToPropertyInspectorAsync(runtime.Context, new
                 {
                     @event = "defaultsLoaded",
-                    settings = savedSettings
+                    settings = primarySaved
                 }, cancellationToken);
                 await SendRuntimeStateAsync(runtime.Context, cancellationToken);
             }

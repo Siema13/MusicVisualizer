@@ -204,6 +204,8 @@ namespace MusicVisualizerLoopback
             var hash = new HashCode();
             hash.Add(SettingsVersion);
             hash.Add(settings.RenderMode);
+            hash.Add(settings.SpanCount);
+            hash.Add(settings.SpanIndex);
             hash.Add(settings.BarCount);
             hash.Add(settings.BgColor);
             hash.Add(settings.PeakHold);
