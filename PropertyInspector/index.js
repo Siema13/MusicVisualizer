@@ -55,11 +55,18 @@ function defaults() {
     paused: false,
     renderMode: "bars",
     orientation: "up",
+    shortPressAction: "togglePause",
     longPressAction: "cycleRenderMode",
     dotSpacing: 3,
     showNumericMeter: false,
+    showBpmOverlay: false,
     beatPulseEnabled: false,
     idleIconEnabled: false,
+    floorReflectionEnabled: false,
+    peakSparksEnabled: false,
+    energyTintEnabled: false,
+    scanlinesEnabled: false,
+    clipLedEnabled: false,
     autoPauseEnabled: false,
     autoPauseTimeoutSec: 30,
     ledSegmentMode: "fixedCount",
@@ -195,19 +202,28 @@ function normalizeSettings(input) {
   s.bgColor = normalizeHex(s.bgColor, "#08150e");
   s.paused = !!s.paused;
 
-  if (!["bars", "vuMeter", "mirror", "dots", "ledSegments", "waveform", "stereo", "area", "radial", "waterfall"].includes(s.renderMode)) {
+  if (!["bars", "vuMeter", "mirror", "dots", "ledSegments", "waveform", "stereo", "area", "radial", "waterfall", "matrix", "fire", "ekg", "vectorscope", "starfield"].includes(s.renderMode)) {
     s.renderMode = "bars";
   }
   if (!["up", "down", "left", "right"].includes(s.orientation)) {
     s.orientation = "up";
+  }
+  if (!["cycleRenderMode", "cycleGradientPreset", "togglePause", "none"].includes(s.shortPressAction)) {
+    s.shortPressAction = "togglePause";
   }
   if (!["cycleRenderMode", "cycleGradientPreset", "togglePause", "none"].includes(s.longPressAction)) {
     s.longPressAction = "cycleRenderMode";
   }
   s.dotSpacing = clampInt(s.dotSpacing, 2, 10, 3);
   s.showNumericMeter = !!s.showNumericMeter;
+  s.showBpmOverlay = !!s.showBpmOverlay;
   s.beatPulseEnabled = !!s.beatPulseEnabled;
   s.idleIconEnabled = !!s.idleIconEnabled;
+  s.floorReflectionEnabled = !!s.floorReflectionEnabled;
+  s.peakSparksEnabled = !!s.peakSparksEnabled;
+  s.energyTintEnabled = !!s.energyTintEnabled;
+  s.scanlinesEnabled = !!s.scanlinesEnabled;
+  s.clipLedEnabled = !!s.clipLedEnabled;
   s.autoPauseEnabled = !!s.autoPauseEnabled;
   s.autoPauseTimeoutSec = clampInt(s.autoPauseTimeoutSec, 5, 120, 30);
 
@@ -239,6 +255,7 @@ function normalizeSettings(input) {
 
 function loadUiFromSettings(s) {
   setSelectValue("captureDeviceId", s.captureDeviceId);
+  setSelectValue("shortPressAction", s.shortPressAction);
   setSelectValue("longPressAction", s.longPressAction);
   setSelectValue("orientation", s.orientation);
   setSelectValue("spanCount", String(s.spanCount));
@@ -284,8 +301,14 @@ function loadUiFromSettings(s) {
   setCheckbox("peakHold", s.peakHold);
   setCheckbox("autoGainEnabled", s.autoGainEnabled);
   setCheckbox("showNumericMeter", s.showNumericMeter);
+  setCheckbox("showBpmOverlay", s.showBpmOverlay);
   setCheckbox("beatPulseEnabled", s.beatPulseEnabled);
   setCheckbox("idleIconEnabled", s.idleIconEnabled);
+  setCheckbox("floorReflectionEnabled", s.floorReflectionEnabled);
+  setCheckbox("peakSparksEnabled", s.peakSparksEnabled);
+  setCheckbox("energyTintEnabled", s.energyTintEnabled);
+  setCheckbox("scanlinesEnabled", s.scanlinesEnabled);
+  setCheckbox("clipLedEnabled", s.clipLedEnabled);
   setCheckbox("autoPauseEnabled", s.autoPauseEnabled);
 
   toggleVisibility("dotSpacingRow", s.renderMode === "dots");
@@ -457,11 +480,18 @@ function collectSettingsFromUi() {
     paused: !!settings?.paused,
     renderMode: settings?.renderMode || "bars",
     orientation: getValue("orientation", "up"),
+    shortPressAction: getValue("shortPressAction", "togglePause"),
     longPressAction: getValue("longPressAction", "cycleRenderMode"),
     dotSpacing: parseInt(getValue("dotSpacing", "3"), 10),
     showNumericMeter: !!document.getElementById("showNumericMeter")?.checked,
+    showBpmOverlay: !!document.getElementById("showBpmOverlay")?.checked,
     beatPulseEnabled: !!document.getElementById("beatPulseEnabled")?.checked,
     idleIconEnabled: !!document.getElementById("idleIconEnabled")?.checked,
+    floorReflectionEnabled: !!document.getElementById("floorReflectionEnabled")?.checked,
+    peakSparksEnabled: !!document.getElementById("peakSparksEnabled")?.checked,
+    energyTintEnabled: !!document.getElementById("energyTintEnabled")?.checked,
+    scanlinesEnabled: !!document.getElementById("scanlinesEnabled")?.checked,
+    clipLedEnabled: !!document.getElementById("clipLedEnabled")?.checked,
     autoPauseEnabled: !!document.getElementById("autoPauseEnabled")?.checked,
     autoPauseTimeoutSec: parseInt(getValue("autoPauseTimeoutSec", "30"), 10),
     ledSegmentMode: getValue("ledSegmentMode", "fixedCount"),
@@ -979,8 +1009,9 @@ function initUi() {
   bindRange("ledLowThreshold", "ledLowThresholdVal", 2, "", false, previewSettings);
   bindRange("ledHighThreshold", "ledHighThresholdVal", 2, "", false, previewSettings);
 
-  ["captureDeviceId", "longPressAction", "orientation", "autoGainEnabled", "spanIndex", "freqMin", "freqMax", "peakHold", "bgColor",
-   "showNumericMeter", "beatPulseEnabled", "idleIconEnabled", "ledLowColor", "ledMidColor", "ledHighColor"
+  ["captureDeviceId", "shortPressAction", "longPressAction", "orientation", "autoGainEnabled", "spanIndex", "freqMin", "freqMax", "peakHold", "bgColor",
+   "showNumericMeter", "showBpmOverlay", "beatPulseEnabled", "idleIconEnabled", "floorReflectionEnabled", "peakSparksEnabled", "energyTintEnabled", "scanlinesEnabled", "clipLedEnabled",
+   "ledLowColor", "ledMidColor", "ledHighColor"
   ].forEach(id => bindSimpleChange(id, () => previewSettings()));
 
   bindSimpleChange("spanCount", () => {

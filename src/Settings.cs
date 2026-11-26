@@ -20,7 +20,12 @@ namespace MusicVisualizerLoopback
             "stereo",
             "area",
             "radial",
-            "waterfall"
+            "waterfall",
+            "matrix",
+            "fire",
+            "ekg",
+            "vectorscope",
+            "starfield"
         };
 
         public static readonly GradientStop[][] GradientPresets =
@@ -162,7 +167,8 @@ namespace MusicVisualizerLoopback
 
             settings.RenderMode = NormalizeRenderMode(settings.RenderMode);
             settings.Orientation = NormalizeOrientation(settings.Orientation);
-            settings.LongPressAction = NormalizeLongPressAction(settings.LongPressAction);
+            settings.ShortPressAction = NormalizePressAction(settings.ShortPressAction, "togglePause");
+            settings.LongPressAction = NormalizePressAction(settings.LongPressAction, "cycleRenderMode");
             settings.DotSpacing = Math.Clamp(settings.DotSpacing, 2, 10);
             settings.AutoPauseTimeoutSec = Math.Clamp(settings.AutoPauseTimeoutSec, 5, 120);
 
@@ -227,6 +233,11 @@ namespace MusicVisualizerLoopback
                 "area" => "area",
                 "radial" => "radial",
                 "waterfall" => "waterfall",
+                "matrix" => "matrix",
+                "fire" => "fire",
+                "ekg" => "ekg",
+                "vectorscope" => "vectorscope",
+                "starfield" => "starfield",
                 _ => "bars"
             };
         }
@@ -243,7 +254,7 @@ namespace MusicVisualizerLoopback
             };
         }
 
-        private static string NormalizeLongPressAction(string? action)
+        private static string NormalizePressAction(string? action, string fallback)
         {
             return action switch
             {
@@ -251,7 +262,7 @@ namespace MusicVisualizerLoopback
                 "cycleGradientPreset" => "cycleGradientPreset",
                 "togglePause" => "togglePause",
                 "none" => "none",
-                _ => "cycleRenderMode"
+                _ => fallback
             };
         }
 
@@ -372,6 +383,9 @@ namespace MusicVisualizerLoopback
         [JsonPropertyName("orientation")]
         public string Orientation { get; set; } = "up";
 
+        [JsonPropertyName("shortPressAction")]
+        public string ShortPressAction { get; set; } = "togglePause";
+
         [JsonPropertyName("longPressAction")]
         public string LongPressAction { get; set; } = "cycleRenderMode";
 
@@ -381,11 +395,29 @@ namespace MusicVisualizerLoopback
         [JsonPropertyName("showNumericMeter")]
         public bool ShowNumericMeter { get; set; } = false;
 
+        [JsonPropertyName("showBpmOverlay")]
+        public bool ShowBpmOverlay { get; set; } = false;
+
         [JsonPropertyName("beatPulseEnabled")]
         public bool BeatPulseEnabled { get; set; } = false;
 
         [JsonPropertyName("idleIconEnabled")]
         public bool IdleIconEnabled { get; set; } = false;
+
+        [JsonPropertyName("floorReflectionEnabled")]
+        public bool FloorReflectionEnabled { get; set; } = false;
+
+        [JsonPropertyName("peakSparksEnabled")]
+        public bool PeakSparksEnabled { get; set; } = false;
+
+        [JsonPropertyName("energyTintEnabled")]
+        public bool EnergyTintEnabled { get; set; } = false;
+
+        [JsonPropertyName("scanlinesEnabled")]
+        public bool ScanlinesEnabled { get; set; } = false;
+
+        [JsonPropertyName("clipLedEnabled")]
+        public bool ClipLedEnabled { get; set; } = false;
 
         [JsonPropertyName("autoPauseEnabled")]
         public bool AutoPauseEnabled { get; set; } = false;
@@ -454,11 +486,18 @@ namespace MusicVisualizerLoopback
                 Paused = Paused,
                 RenderMode = RenderMode,
                 Orientation = Orientation,
+                ShortPressAction = ShortPressAction,
                 LongPressAction = LongPressAction,
                 DotSpacing = DotSpacing,
                 ShowNumericMeter = ShowNumericMeter,
+                ShowBpmOverlay = ShowBpmOverlay,
                 BeatPulseEnabled = BeatPulseEnabled,
                 IdleIconEnabled = IdleIconEnabled,
+                FloorReflectionEnabled = FloorReflectionEnabled,
+                PeakSparksEnabled = PeakSparksEnabled,
+                EnergyTintEnabled = EnergyTintEnabled,
+                ScanlinesEnabled = ScanlinesEnabled,
+                ClipLedEnabled = ClipLedEnabled,
                 AutoPauseEnabled = AutoPauseEnabled,
                 AutoPauseTimeoutSec = AutoPauseTimeoutSec,
                 LedSegmentMode = LedSegmentMode,

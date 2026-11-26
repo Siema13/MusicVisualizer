@@ -5,6 +5,21 @@ using System.Text.Json;
 
 namespace MusicVisualizerLoopback
 {
+    internal struct SparkParticle
+    {
+        public float X;
+        public float Y;
+        public float Vy;
+        public float Life;
+    }
+
+    internal struct StarParticle
+    {
+        public float X;
+        public float Y;
+        public float Z;
+    }
+
     internal sealed class ActionRuntime
     {
         private readonly object _settingsLock = new object();
@@ -40,6 +55,8 @@ namespace MusicVisualizerLoopback
         public float[] MappedScratch { get; private set; }
         public float[] SmoothedBands { get; private set; }
         public float[] Waveform { get; }
+        public float[] WaveformLeft { get; } = new float[AudioEngine.WaveformPoints];
+        public float[] WaveformRight { get; } = new float[AudioEngine.WaveformPoints];
         public float StereoLeft { get; set; }
         public float StereoRight { get; set; }
         public float StereoPeakLeft { get; set; }
@@ -47,10 +64,29 @@ namespace MusicVisualizerLoopback
         public float BeatPulseLevel { get; set; }
         public float BeatBassBaseline { get; set; }
         public double AgcOffsetDb { get; set; }
+        public float EnergyLevel { get; set; }
+        public float ClipHoldSeconds { get; set; }
+        public int EstimatedBpm { get; set; }
+        public long DynamicFrameTick { get; set; }
         public byte[]? WaterfallHistory { get; set; }
         public int WaterfallWidth { get; set; }
         public int WaterfallHeight { get; set; }
         public long WaterfallTick { get; set; }
+        public byte[]? FireBuffer { get; set; }
+        public int FireWidth { get; set; }
+        public int FireHeight { get; set; }
+        public float[]? MatrixDrops { get; set; }
+        public float[]? MatrixSpeeds { get; set; }
+        public float[]? EkgHistory { get; set; }
+        public int EkgPulseCountdown { get; set; }
+        public byte[]? ScopeTrail { get; set; }
+        public int ScopeWidth { get; set; }
+        public int ScopeHeight { get; set; }
+        public StarParticle[]? Stars { get; set; }
+        public SparkParticle[]? Sparks { get; set; }
+        public int SparkWriteIndex { get; set; }
+        public float LastDtSeconds { get; set; } = 0.033f;
+        public uint RngState { get; set; } = 0x13579BDFu;
         public bool IsIdleState { get; set; }
         public long LastSmoothedSnapshotVersion { get; set; } = -1;
 
@@ -219,10 +255,36 @@ namespace MusicVisualizerLoopback
             hash.Add(settings.TopRadius);
             hash.Add(settings.DotSpacing);
             hash.Add(settings.ShowNumericMeter);
+            hash.Add(settings.ShowBpmOverlay);
             hash.Add(settings.BeatPulseEnabled);
             hash.Add(settings.IdleIconEnabled);
+            hash.Add(settings.FloorReflectionEnabled);
+            hash.Add(settings.PeakSparksEnabled);
+            hash.Add(settings.EnergyTintEnabled);
+            hash.Add(settings.ScanlinesEnabled);
+            hash.Add(settings.ClipLedEnabled);
             hash.Add(settings.Paused);
             hash.Add(IsIdleState);
+
+            if (settings.ShowBpmOverlay)
+            {
+                hash.Add(EstimatedBpm);
+            }
+
+            if (settings.ClipLedEnabled)
+            {
+                hash.Add(ClipHoldSeconds > 0f);
+            }
+
+            if (settings.EnergyTintEnabled)
+            {
+                hash.Add((int)MathF.Round(EnergyLevel * 10f));
+            }
+
+            if (settings.PeakSparksEnabled)
+            {
+                hash.Add(DynamicFrameTick);
+            }
 
             if (settings.BeatPulseEnabled)
             {
@@ -260,6 +322,15 @@ namespace MusicVisualizerLoopback
             if (settings.RenderMode == "waterfall")
             {
                 hash.Add(WaterfallTick);
+                sum = LastOverallLevel * actualBars;
+            }
+            else if (settings.RenderMode == "matrix" ||
+                     settings.RenderMode == "fire" ||
+                     settings.RenderMode == "ekg" ||
+                     settings.RenderMode == "vectorscope" ||
+                     settings.RenderMode == "starfield")
+            {
+                hash.Add(DynamicFrameTick);
                 sum = LastOverallLevel * actualBars;
             }
             else if (settings.RenderMode == "waveform")

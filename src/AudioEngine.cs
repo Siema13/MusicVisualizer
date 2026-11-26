@@ -27,10 +27,22 @@ namespace MusicVisualizerLoopback
         private float[] _magnitudes = Array.Empty<float>();
         private float[] _snapshotBuffer = Array.Empty<float>();
         private float[] _waveformBuffer = new float[WaveformPoints];
+        private float[] _waveLeftRing = new float[256];
+        private float[] _waveRightRing = new float[256];
+        private float[] _waveLeftSnapshot = new float[WaveformPoints];
+        private float[] _waveRightSnapshot = new float[WaveformPoints];
+        private int _stereoWriteIndex;
         private int _fftWriteIndex;
         private float _accumLeftSq;
         private float _accumRightSq;
+        private float _accumPeakAbs;
         private int _accumSamples;
+        private float _bpmBassAvg;
+        private long _lastBeatTicks;
+        private readonly double[] _beatIntervals = new double[8];
+        private int _beatIntervalWriteIdx;
+        private int _beatIntervalCount;
+        private int _estimatedBpm;
         private SpectrumSnapshot _latestSnapshot;
         private volatile bool _hasNewAudio;
         private long _lastFftTicks;
@@ -46,7 +58,7 @@ namespace MusicVisualizerLoopback
             {
                 _hannWindow[i] = (float)FastFourierTransform.HannWindow(i, fftSize);
             }
-            _latestSnapshot = new SpectrumSnapshot(Array.Empty<float>(), new float[WaveformPoints], 48000);
+            _latestSnapshot = new SpectrumSnapshot(Array.Empty<float>(), new float[WaveformPoints], new float[WaveformPoints], new float[WaveformPoints], 48000);
             CurrentDeviceId = "default";
         }
 
@@ -90,7 +102,9 @@ namespace MusicVisualizerLoopback
                         var newMagnitudes = new float[_fftSize / 2];
                         var newSnapshotBuffer = new float[_fftSize / 2];
                         var newWaveformBuffer = new float[WaveformPoints];
-                        var newSnapshot = new SpectrumSnapshot(newSnapshotBuffer, newWaveformBuffer, SampleRate);
+                        var newWaveLeft = new float[WaveformPoints];
+                        var newWaveRight = new float[WaveformPoints];
+                        var newSnapshot = new SpectrumSnapshot(newSnapshotBuffer, newWaveformBuffer, newWaveLeft, newWaveRight, SampleRate);
 
                         lock (_sampleSync)
                         {
@@ -100,10 +114,21 @@ namespace MusicVisualizerLoopback
                             _magnitudes = newMagnitudes;
                             _snapshotBuffer = newSnapshotBuffer;
                             _waveformBuffer = newWaveformBuffer;
+                            _waveLeftSnapshot = newWaveLeft;
+                            _waveRightSnapshot = newWaveRight;
+                            Array.Clear(_waveLeftRing, 0, _waveLeftRing.Length);
+                            Array.Clear(_waveRightRing, 0, _waveRightRing.Length);
+                            _stereoWriteIndex = 0;
                             _fftWriteIndex = 0;
                             _accumLeftSq = 0f;
                             _accumRightSq = 0f;
+                            _accumPeakAbs = 0f;
                             _accumSamples = 0;
+                            _bpmBassAvg = 0f;
+                            _lastBeatTicks = 0;
+                            _beatIntervalCount = 0;
+                            _beatIntervalWriteIdx = 0;
+                            _estimatedBpm = 0;
                             _hasNewAudio = false;
                             Volatile.Write(ref _lastAudioDataTicks, 0);
                             _latestSnapshot = newSnapshot;
@@ -158,21 +183,27 @@ namespace MusicVisualizerLoopback
                     frames,
                     _fftInput,
                     _fftWriteIndex,
+                    _waveLeftRing,
+                    _waveRightRing,
+                    ref _stereoWriteIndex,
                     out float leftSq,
-                    out float rightSq);
+                    out float rightSq,
+                    out float peakAbs);
                 _accumLeftSq += leftSq;
                 _accumRightSq += rightSq;
+                if (peakAbs > _accumPeakAbs) _accumPeakAbs = peakAbs;
                 _accumSamples += frames;
                 Volatile.Write(ref _lastAudioDataTicks, Stopwatch.GetTimestamp());
                 _hasNewAudio = true;
             }
         }
 
-        private bool BuildSpectrumFromLatestWindow(out float bassEnergy, out float rmsLeft, out float rmsRight)
+        private bool BuildSpectrumFromLatestWindow(long nowTicks, out float bassEnergy, out float rmsLeft, out float rmsRight, out float peakAbs)
         {
             bassEnergy = 0f;
             rmsLeft = 0f;
             rmsRight = 0f;
+            peakAbs = 0f;
 
             var capture = _capture;
             int binCount = _magnitudes.Length;
@@ -189,9 +220,20 @@ namespace MusicVisualizerLoopback
             {
                 rmsLeft = MathF.Sqrt(_accumLeftSq / _accumSamples);
                 rmsRight = MathF.Sqrt(_accumRightSq / _accumSamples);
+                peakAbs = _accumPeakAbs;
                 _accumLeftSq = 0f;
                 _accumRightSq = 0f;
+                _accumPeakAbs = 0f;
                 _accumSamples = 0;
+            }
+
+            // Copy stereo L/R ring into snapshot for Vectorscope (Lissajous)
+            int sLen = _waveLeftRing.Length;
+            for (int i = 0; i < WaveformPoints; i++)
+            {
+                int srcIdx = (_stereoWriteIndex + (i * sLen) / WaveformPoints) % sLen;
+                _waveLeftSnapshot[i] = _waveLeftRing[srcIdx];
+                _waveRightSnapshot[i] = _waveRightRing[srcIdx];
             }
 
             int tail = _fftSize - _fftWriteIndex;
@@ -260,7 +302,53 @@ namespace MusicVisualizerLoopback
                 bassEnergy = (float)Math.Sqrt(bassSumSq / bassCount);
             }
 
+            // Lightweight live BPM estimator (zero allocations)
+            UpdateBpmEstimate(nowTicks, bassEnergy, hasSignal);
+
             return hasSignal;
+        }
+
+        private void UpdateBpmEstimate(long nowTicks, float bassEnergy, bool hasSignal)
+        {
+            if (!hasSignal)
+            {
+                _bpmBassAvg *= 0.92f;
+                if (_lastBeatTicks > 0 && (nowTicks - _lastBeatTicks) > Stopwatch.Frequency * 3)
+                {
+                    _estimatedBpm = 0;
+                    _beatIntervalCount = 0;
+                }
+                return;
+            }
+
+            _bpmBassAvg += (bassEnergy - _bpmBassAvg) * 0.08f;
+            long minBeatGap = (long)(Stopwatch.Frequency * 0.27); // max ~222 BPM
+            long maxBeatGap = (long)(Stopwatch.Frequency * 1.25); // min ~48 BPM
+
+            if (bassEnergy > 0.002f && bassEnergy > _bpmBassAvg * 1.48f && (nowTicks - _lastBeatTicks) >= minBeatGap)
+            {
+                if (_lastBeatTicks > 0 && (nowTicks - _lastBeatTicks) <= maxBeatGap)
+                {
+                    double intervalSec = (nowTicks - _lastBeatTicks) / (double)Stopwatch.Frequency;
+                    _beatIntervals[_beatIntervalWriteIdx] = intervalSec;
+                    _beatIntervalWriteIdx = (_beatIntervalWriteIdx + 1) % _beatIntervals.Length;
+                    if (_beatIntervalCount < _beatIntervals.Length) _beatIntervalCount++;
+
+                    if (_beatIntervalCount >= 3)
+                    {
+                        double sum = 0.0;
+                        for (int i = 0; i < _beatIntervalCount; i++) sum += _beatIntervals[i];
+                        double avgSec = sum / _beatIntervalCount;
+                        double bpm = 60.0 / avgSec;
+                        while (bpm < 65.0) bpm *= 2.0;
+                        while (bpm > 190.0) bpm *= 0.5;
+                        _estimatedBpm = _estimatedBpm == 0
+                            ? (int)Math.Round(bpm)
+                            : (int)Math.Round(_estimatedBpm * 0.75 + bpm * 0.25);
+                    }
+                }
+                _lastBeatTicks = nowTicks;
+            }
         }
 
         private void CaptureOnRecordingStopped(object? sender, StoppedEventArgs e)
@@ -285,12 +373,14 @@ namespace MusicVisualizerLoopback
                         {
                             _hasNewAudio = false;
                             _lastFftTicks = nowTicks;
-                            bool hasSignal = BuildSpectrumFromLatestWindow(out float bassEnergy, out float rmsLeft, out float rmsRight);
+                            bool hasSignal = BuildSpectrumFromLatestWindow(nowTicks, out float bassEnergy, out float rmsLeft, out float rmsRight, out float peakAbs);
                             Array.Copy(_magnitudes, _snapshotBuffer, _magnitudes.Length);
                             _latestSnapshot.HasSignal = hasSignal;
                             _latestSnapshot.BassEnergy = bassEnergy;
                             _latestSnapshot.RmsLeft = rmsLeft;
                             _latestSnapshot.RmsRight = rmsRight;
+                            _latestSnapshot.PeakAbs = peakAbs;
+                            _latestSnapshot.EstimatedBpm = _estimatedBpm;
                             _latestSnapshot.Version++;
                         }
                     }
@@ -309,10 +399,14 @@ namespace MusicVisualizerLoopback
                             Array.Clear(_magnitudes, 0, _magnitudes.Length);
                             Array.Clear(_snapshotBuffer, 0, _snapshotBuffer.Length);
                             Array.Clear(_waveformBuffer, 0, _waveformBuffer.Length);
+                            Array.Clear(_waveLeftSnapshot, 0, _waveLeftSnapshot.Length);
+                            Array.Clear(_waveRightSnapshot, 0, _waveRightSnapshot.Length);
                             _latestSnapshot.HasSignal = false;
                             _latestSnapshot.BassEnergy = 0f;
                             _latestSnapshot.RmsLeft = 0f;
                             _latestSnapshot.RmsRight = 0f;
+                            _latestSnapshot.PeakAbs = 0f;
+                            _latestSnapshot.EstimatedBpm = 0;
                             _latestSnapshot.Version++;
                         }
                     }
@@ -355,13 +449,18 @@ namespace MusicVisualizerLoopback
                 _magnitudes = Array.Empty<float>();
                 _snapshotBuffer = Array.Empty<float>();
                 Array.Clear(_waveformBuffer, 0, _waveformBuffer.Length);
+                Array.Clear(_waveLeftSnapshot, 0, _waveLeftSnapshot.Length);
+                Array.Clear(_waveRightSnapshot, 0, _waveRightSnapshot.Length);
                 _fftWriteIndex = 0;
+                _stereoWriteIndex = 0;
                 _accumLeftSq = 0f;
                 _accumRightSq = 0f;
+                _accumPeakAbs = 0f;
                 _accumSamples = 0;
+                _estimatedBpm = 0;
                 _hasNewAudio = false;
                 Volatile.Write(ref _lastAudioDataTicks, 0);
-                _latestSnapshot = new SpectrumSnapshot(Array.Empty<float>(), _waveformBuffer, SampleRate);
+                _latestSnapshot = new SpectrumSnapshot(Array.Empty<float>(), _waveformBuffer, _waveLeftSnapshot, _waveRightSnapshot, SampleRate);
             }
 
             IsCapturing = false;
@@ -496,20 +595,26 @@ namespace MusicVisualizerLoopback
 
     internal sealed class SpectrumSnapshot
     {
-        public SpectrumSnapshot(float[] magnitudes, float[] waveform, int sampleRate)
+        public SpectrumSnapshot(float[] magnitudes, float[] waveform, float[] waveformLeft, float[] waveformRight, int sampleRate)
         {
             Magnitudes = magnitudes;
             Waveform = waveform;
+            WaveformLeft = waveformLeft;
+            WaveformRight = waveformRight;
             SampleRate = sampleRate;
         }
 
         public float[] Magnitudes { get; }
         public float[] Waveform { get; }
+        public float[] WaveformLeft { get; }
+        public float[] WaveformRight { get; }
         public int SampleRate { get; }
         public bool HasSignal { get; set; }
         public float BassEnergy { get; set; }
         public float RmsLeft { get; set; }
         public float RmsRight { get; set; }
+        public float PeakAbs { get; set; }
+        public int EstimatedBpm { get; set; }
         public long Version { get; set; }
     }
 
@@ -565,12 +670,18 @@ namespace MusicVisualizerLoopback
             int frameCount,
             float[] ringBuffer,
             int writeIndex,
+            float[] leftRing,
+            float[] rightRing,
+            ref int stereoWriteIndex,
             out float leftSqSum,
-            out float rightSqSum)
+            out float rightSqSum,
+            out float peakAbs)
         {
             leftSqSum = 0f;
             rightSqSum = 0f;
+            peakAbs = 0f;
             int ringLen = ringBuffer.Length;
+            int stereoLen = leftRing.Length;
             int channels = Math.Max(1, format.Channels);
 
             if (IsFloat32(format))
@@ -597,8 +708,17 @@ namespace MusicVisualizerLoopback
                     }
 
                     if (channels == 1) r = l;
+                    float absL = MathF.Abs(l);
+                    float absR = MathF.Abs(r);
+                    if (absL > peakAbs) peakAbs = absL;
+                    if (absR > peakAbs) peakAbs = absR;
                     leftSqSum += l * l;
                     rightSqSum += r * r;
+
+                    leftRing[stereoWriteIndex] = l;
+                    rightRing[stereoWriteIndex] = r;
+                    stereoWriteIndex++;
+                    if (stereoWriteIndex >= stereoLen) stereoWriteIndex = 0;
 
                     ringBuffer[writeIndex] = mix * invChannels;
                     writeIndex++;
@@ -636,8 +756,17 @@ namespace MusicVisualizerLoopback
                     }
 
                     if (channels == 1) r = l;
+                    float absL = MathF.Abs(l);
+                    float absR = MathF.Abs(r);
+                    if (absL > peakAbs) peakAbs = absL;
+                    if (absR > peakAbs) peakAbs = absR;
                     leftSqSum += l * l;
                     rightSqSum += r * r;
+
+                    leftRing[stereoWriteIndex] = l;
+                    rightRing[stereoWriteIndex] = r;
+                    stereoWriteIndex++;
+                    if (stereoWriteIndex >= stereoLen) stereoWriteIndex = 0;
 
                     ringBuffer[writeIndex] = mix * invScale;
                     writeIndex++;

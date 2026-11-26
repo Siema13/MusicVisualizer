@@ -18,12 +18,14 @@ namespace MusicVisualizerLoopback
         private static readonly byte[] PngIendChunk = { 0x00, 0x00, 0x00, 0x00, (byte)'I', (byte)'E', (byte)'N', (byte)'D', 0xAE, 0x42, 0x60, 0x82 };
         private static readonly uint[] CrcTable = BuildCrc32Table();
 
-        // Fixed high palette indices (valid for all render heights <= 238 px; 255 total palette entries)
+        // Fixed high palette indices (valid for all render heights <= 236 px; 255 total palette entries)
         private const int PaletteSize = 255;
         private const byte IdxBg = 0;
         private const byte IdxLedLow = 1;
         private const byte IdxLedMid = 2;
         private const byte IdxLedHigh = 3;
+        private const byte IdxDimScanline = 238;
+        private const byte IdxClipRed = 239;
         private const byte IdxPulseBase = 240; // 240..247: 8 smooth pulsing background levels
         private const byte IdxBlack = 248;
         private const byte IdxOverlayBg = 249;
@@ -93,17 +95,21 @@ namespace MusicVisualizerLoopback
                 RenderBeatPulseBackground(raw, width, height, runtime.BeatPulseLevel);
             }
 
-            // Render selected visualization mode (all 10 modes on zero-GC 8-bit indexed PNG path)
+            // Render selected visualization mode (all 15 modes on zero-GC 8-bit indexed PNG path)
+            int activeHeight = settings.FloorReflectionEnabled && SupportsFloorReflection(settings.RenderMode)
+                ? Math.Max(16, (int)(height * 0.76f))
+                : height;
+
             switch (settings.RenderMode)
             {
                 case "ledSegments":
-                    RenderIndexedLedSegments(raw, width, height, settings, runtime.Bars);
+                    RenderIndexedLedSegments(raw, width, activeHeight, settings, runtime.Bars);
                     break;
                 case "mirror":
                     RenderIndexedMirrorBars(raw, width, height, settings, runtime.Bars);
                     break;
                 case "dots":
-                    RenderIndexedDots(raw, width, height, settings, runtime.Bars);
+                    RenderIndexedDots(raw, width, activeHeight, settings, runtime.Bars);
                     break;
                 case "vuMeter":
                     RenderIndexedVuMeter(raw, width, height, runtime.Bars);
@@ -112,10 +118,10 @@ namespace MusicVisualizerLoopback
                     RenderIndexedWaveform(raw, width, height, settings, runtime.Waveform);
                     break;
                 case "stereo":
-                    RenderIndexedStereo(raw, width, height, settings, runtime.StereoLeft, runtime.StereoRight, runtime.StereoPeakLeft, runtime.StereoPeakRight);
+                    RenderIndexedStereo(raw, width, activeHeight, settings, runtime.StereoLeft, runtime.StereoRight, runtime.StereoPeakLeft, runtime.StereoPeakRight);
                     break;
                 case "area":
-                    RenderIndexedArea(raw, width, height, settings, runtime.Bars);
+                    RenderIndexedArea(raw, width, activeHeight, settings, runtime.Bars);
                     break;
                 case "radial":
                     RenderIndexedRadial(raw, width, height, settings, runtime.Bars);
@@ -123,12 +129,51 @@ namespace MusicVisualizerLoopback
                 case "waterfall":
                     RenderIndexedWaterfall(raw, width, height, runtime);
                     break;
+                case "matrix":
+                    RenderIndexedMatrix(raw, width, height, runtime);
+                    break;
+                case "fire":
+                    RenderIndexedFire(raw, width, height, runtime);
+                    break;
+                case "ekg":
+                    RenderIndexedEkg(raw, width, height, settings, runtime);
+                    break;
+                case "vectorscope":
+                    RenderIndexedVectorscope(raw, width, height, runtime);
+                    break;
+                case "starfield":
+                    RenderIndexedStarfield(raw, width, height, runtime);
+                    break;
                 default:
-                    RenderIndexedBars(raw, width, height, settings, runtime.Bars, runtime.Peaks);
+                    RenderIndexedBars(raw, width, activeHeight, settings, runtime.Bars, runtime.Peaks);
                     break;
             }
 
-            // Apply orientation transform (down/left/right) BEFORE text/pause overlays so glyphs stay upright
+            // Optional Floor Reflection (dimmed mirror in bottom 24% of tile)
+            if (settings.FloorReflectionEnabled && activeHeight < height)
+            {
+                ApplyFloorReflection(raw, width, height, activeHeight);
+            }
+
+            // Optional Peak Sparks particles
+            if (settings.PeakSparksEnabled && runtime.Sparks != null)
+            {
+                RenderPeakSparks(raw, width, height, runtime.Sparks);
+            }
+
+            // Optional Energy Tint (subtly shifts palette index upward on loud drops)
+            if (settings.EnergyTintEnabled && settings.RenderMode != "ledSegments")
+            {
+                ApplyEnergyTint(raw, width, height, runtime.EnergyLevel);
+            }
+
+            // Optional CRT / Scanlines retro filter
+            if (settings.ScanlinesEnabled)
+            {
+                ApplyScanlines(raw, width, height);
+            }
+
+            // Apply orientation transform (down/left/right) BEFORE text/pause/LED overlays so glyphs stay upright
             if (settings.Orientation != "up")
             {
                 ApplyOrientation(raw, scratch.RotateBuffer, width, height, settings.Orientation);
@@ -144,6 +189,18 @@ namespace MusicVisualizerLoopback
             if (settings.ShowNumericMeter)
             {
                 RenderNumericOverlayIndexed(raw, width, height, runtime.LastOverallLevel);
+            }
+
+            // Optional BPM overlay in top-right corner
+            if (settings.ShowBpmOverlay)
+            {
+                RenderBpmOverlayIndexed(raw, width, height, runtime.EstimatedBpm);
+            }
+
+            // Optional red Clip LED in bottom-right corner on 0 dBFS peaks
+            if (settings.ClipLedEnabled && runtime.ClipHoldSeconds > 0f)
+            {
+                RenderClipLed(raw, width, height);
             }
 
             return EncodeIndexedPng(header, raw, scratch.ZlibStreamBuffer, scratch.Stream);
@@ -178,7 +235,7 @@ namespace MusicVisualizerLoopback
             }
             else
             {
-                int gradCount = Math.Min(height, 238);
+                int gradCount = Math.Min(height, 236);
                 float denom = Math.Max(1, gradCount - 1);
                 for (int y = 0; y < gradCount; y++)
                 {
@@ -187,6 +244,9 @@ namespace MusicVisualizerLoopback
                     WriteRgb(paletteRgb, 1 + y, rowColor);
                 }
             }
+
+            WriteRgb(paletteRgb, IdxDimScanline, Blend(bg, Color.Black, 0.55f));
+            WriteRgb(paletteRgb, IdxClipRed, Color.FromArgb(255, 255, 23, 68));
 
             // 8 smooth pulsing background levels (0% -> 46% blend toward accent)
             for (int p = 0; p < 8; p++)
@@ -229,8 +289,8 @@ namespace MusicVisualizerLoopback
 
         private static byte GradientIndexForRow(int y, int height)
         {
-            int maxGrad = Math.Min(height, 238);
-            if (height <= 238)
+            int maxGrad = Math.Min(height, 236);
+            if (height <= 236)
             {
                 return (byte)(1 + Math.Clamp(y, 0, maxGrad - 1));
             }
@@ -239,9 +299,14 @@ namespace MusicVisualizerLoopback
 
         private static byte GradientIndexForNormalized(float t, int height)
         {
-            int maxGrad = Math.Min(height, 238);
+            int maxGrad = Math.Min(height, 236);
             int idx = (int)MathF.Round((1f - Math.Clamp(t, 0f, 1f)) * (maxGrad - 1));
             return (byte)(1 + Math.Clamp(idx, 0, maxGrad - 1));
+        }
+
+        private static bool SupportsFloorReflection(string mode)
+        {
+            return mode == "bars" || mode == "ledSegments" || mode == "dots" || mode == "area" || mode == "stereo";
         }
 
         private static void RenderBeatPulseBackground(byte[] raw, int width, int height, float beatLevel)
@@ -788,6 +853,422 @@ namespace MusicVisualizerLoopback
                         raw[(width - 1 - x) * stride + 1 + y] = tmp[srcRow + x];
                     }
                 }
+            }
+        }
+
+        private static uint NextRand(ActionRuntime runtime)
+        {
+            uint x = runtime.RngState;
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            runtime.RngState = x == 0 ? 0x13579BDFu : x;
+            return runtime.RngState;
+        }
+
+        private static void RenderIndexedMatrix(byte[] raw, int width, int height, ActionRuntime runtime)
+        {
+            int colW = 3;
+            int cols = Math.Max(4, width / colW);
+            if (runtime.MatrixDrops == null || runtime.MatrixDrops.Length != cols || runtime.MatrixSpeeds == null)
+            {
+                runtime.MatrixDrops = new float[cols];
+                runtime.MatrixSpeeds = new float[cols];
+                for (int c = 0; c < cols; c++)
+                {
+                    runtime.MatrixDrops[c] = (NextRand(runtime) % (uint)height);
+                    runtime.MatrixSpeeds[c] = 18f + (NextRand(runtime) % 35u);
+                }
+            }
+
+            float dt = runtime.LastDtSeconds;
+            float energyBoost = 1f + runtime.EnergyLevel * 3.8f + runtime.BeatPulseLevel * 2.2f;
+            int stride = width + 1;
+
+            for (int c = 0; c < cols; c++)
+            {
+                float yHead = runtime.MatrixDrops[c] + runtime.MatrixSpeeds[c] * energyBoost * dt;
+                if (yHead - 18f > height)
+                {
+                    yHead = -(NextRand(runtime) % 14u);
+                    runtime.MatrixSpeeds[c] = 18f + (NextRand(runtime) % 38u);
+                }
+                runtime.MatrixDrops[c] = yHead;
+
+                int x0 = c * colW;
+                int trailLen = 10 + (int)(runtime.EnergyLevel * 14f);
+                int headRow = (int)yHead;
+
+                for (int t = 0; t < trailLen; t++)
+                {
+                    int py = headRow - t;
+                    if (py < 0 || py >= height) continue;
+                    byte colorIdx;
+                    if (t == 0)
+                    {
+                        colorIdx = IdxWhite;
+                    }
+                    else if (t < 4)
+                    {
+                        colorIdx = GradientIndexForNormalized(1f - t * 0.15f, height);
+                    }
+                    else
+                    {
+                        float fade = 1f - (t / (float)trailLen);
+                        colorIdx = (byte)(IdxPulseBase + Math.Clamp((int)MathF.Round(fade * 7f), 1, 7));
+                    }
+
+                    int drawW = Math.Min(2, width - x0);
+                    if (drawW > 0)
+                    {
+                        raw.AsSpan(py * stride + 1 + x0, drawW).Fill(colorIdx);
+                    }
+                }
+            }
+        }
+
+        private static void RenderIndexedFire(byte[] raw, int width, int height, ActionRuntime runtime)
+        {
+            if (runtime.FireBuffer == null || runtime.FireWidth != width || runtime.FireHeight != height)
+            {
+                runtime.FireBuffer = new byte[width * height];
+                runtime.FireWidth = width;
+                runtime.FireHeight = height;
+            }
+
+            byte[] fire = runtime.FireBuffer;
+            float[] bars = runtime.Bars;
+            int barCount = Math.Min(Math.Clamp(runtime.Settings.BarCount, 2, 32), bars.Length);
+
+            // Seed bottom row from spectrum bars
+            int bottomRow = (height - 1) * width;
+            for (int x = 0; x < width; x++)
+            {
+                float val = 0f;
+                if (barCount > 0)
+                {
+                    int bIdx = Math.Clamp((x * barCount) / width, 0, barCount - 1);
+                    val = Math.Clamp(bars[bIdx], 0f, 1f);
+                }
+                int heat = (int)(val * 255f);
+                if (heat > 20)
+                {
+                    heat = Math.Min(255, heat + (int)(NextRand(runtime) % 35u));
+                }
+                fire[bottomRow + x] = (byte)heat;
+            }
+
+            // Propagate fire upward with slight cooling & flicker
+            for (int y = 0; y < height - 1; y++)
+            {
+                int dstRow = y * width;
+                int srcRow = (y + 1) * width;
+                for (int x = 0; x < width; x++)
+                {
+                    int srcX = x + ((int)(NextRand(runtime) % 3u) - 1);
+                    if (srcX < 0) srcX = 0;
+                    else if (srcX >= width) srcX = width - 1;
+                    int decay = (int)(NextRand(runtime) % 6u) + 2;
+                    int nextHeat = fire[srcRow + srcX] - decay;
+                    fire[dstRow + x] = nextHeat > 0 ? (byte)nextHeat : (byte)0;
+                }
+            }
+
+            int stride = width + 1;
+            for (int y = 0; y < height; y++)
+            {
+                int srcRow = y * width;
+                int dstRow = y * stride + 1;
+                for (int x = 0; x < width; x++)
+                {
+                    byte h = fire[srcRow + x];
+                    if (h < 12) continue;
+                    if (h < 75)
+                    {
+                        raw[dstRow + x] = (byte)(IdxPulseBase + Math.Clamp((h * 7) / 75, 1, 7));
+                    }
+                    else
+                    {
+                        raw[dstRow + x] = GradientIndexForNormalized(h / 255f, height);
+                    }
+                }
+            }
+        }
+
+        private static void RenderIndexedEkg(byte[] raw, int width, int height, VisualizerSettings settings, ActionRuntime runtime)
+        {
+            int stride = width + 1;
+            int midY = height / 2;
+            raw.AsSpan(midY * stride + 1, width).Fill(IdxVuArc);
+
+            var hist = runtime.EkgHistory;
+            if (hist == null || hist.Length < 2)
+            {
+                return;
+            }
+
+            int spanCount = Math.Clamp(settings.SpanCount, 1, 6);
+            int spanIndex = Math.Clamp(settings.SpanIndex, 1, spanCount);
+            float sliceStart = ((spanIndex - 1) / (float)spanCount) * (hist.Length - 1);
+            float sliceEnd = (spanIndex / (float)spanCount) * (hist.Length - 1);
+            float sliceSpan = Math.Max(1f, sliceEnd - sliceStart);
+
+            int prevY = SampleWaveY(hist, sliceStart, midY, height);
+            for (int x = 0; x < width; x++)
+            {
+                float pos = sliceStart + (x / (float)Math.Max(1, width - 1)) * sliceSpan;
+                int y = SampleWaveY(hist, pos, midY, height);
+                int yMin = Math.Min(prevY, y);
+                int yMax = Math.Max(prevY, y);
+                byte colorIdx = (x >= width - 3 && spanIndex == spanCount)
+                    ? IdxWhite
+                    : GradientIndexForRow(yMin, height);
+                for (int py = yMin; py <= yMax; py++)
+                {
+                    raw[py * stride + 1 + x] = colorIdx;
+                    if (py + 1 < height) raw[(py + 1) * stride + 1 + x] = colorIdx;
+                }
+                prevY = y;
+            }
+        }
+
+        private static void RenderIndexedVectorscope(byte[] raw, int width, int height, ActionRuntime runtime)
+        {
+            if (runtime.ScopeTrail == null || runtime.ScopeWidth != width || runtime.ScopeHeight != height)
+            {
+                runtime.ScopeTrail = new byte[width * height];
+                runtime.ScopeWidth = width;
+                runtime.ScopeHeight = height;
+            }
+
+            byte[] trail = runtime.ScopeTrail;
+            for (int i = 0; i < trail.Length; i++)
+            {
+                if (trail[i] > 28) trail[i] -= 28;
+                else trail[i] = 0;
+            }
+
+            float cx = width * 0.5f;
+            float cy = height * 0.5f;
+            float scale = Math.Min(width, height) * 0.44f;
+            float gain = (float)Math.Clamp(Math.Pow(10.0, (runtime.Settings.GainDb - 16.0) / 20.0) * 1.4, 0.5, 4.0);
+            float[] left = runtime.WaveformLeft;
+            float[] right = runtime.WaveformRight;
+            int len = Math.Min(left.Length, right.Length);
+
+            for (int i = 0; i < len; i++)
+            {
+                float l = Math.Clamp(left[i] * gain, -1f, 1f);
+                float r = Math.Clamp(right[i] * gain, -1f, 1f);
+                // 45-deg rotated M/S projection: vertical = mono (L+R), horizontal = stereo width (L-R)
+                float sx = (l - r) * 0.707f;
+                float sy = (l + r) * 0.707f;
+                int px = Math.Clamp((int)MathF.Round(cx + sx * scale), 0, width - 1);
+                int py = Math.Clamp((int)MathF.Round(cy - sy * scale), 0, height - 1);
+                trail[py * width + px] = 255;
+            }
+
+            int stride = width + 1;
+            // Subtle crosshair
+            int midY = height / 2;
+            int midX = width / 2;
+            raw.AsSpan(midY * stride + 1, width).Fill(IdxDimScanline);
+            for (int y = 0; y < height; y++) raw[y * stride + 1 + midX] = IdxDimScanline;
+
+            for (int y = 0; y < height; y++)
+            {
+                int srcRow = y * width;
+                int dstRow = y * stride + 1;
+                for (int x = 0; x < width; x++)
+                {
+                    byte v = trail[srcRow + x];
+                    if (v == 0) continue;
+                    raw[dstRow + x] = v > 210
+                        ? IdxWhite
+                        : (v > 90 ? GradientIndexForNormalized(v / 255f, height) : (byte)(IdxPulseBase + Math.Clamp((v * 7) / 90, 1, 7)));
+                }
+            }
+        }
+
+        private static void RenderIndexedStarfield(byte[] raw, int width, int height, ActionRuntime runtime)
+        {
+            const int starCount = 40;
+            if (runtime.Stars == null || runtime.Stars.Length != starCount)
+            {
+                runtime.Stars = new StarParticle[starCount];
+                for (int i = 0; i < starCount; i++)
+                {
+                    runtime.Stars[i] = new StarParticle
+                    {
+                        X = ((NextRand(runtime) % 200u) / 100f) - 1f,
+                        Y = ((NextRand(runtime) % 200u) / 100f) - 1f,
+                        Z = 0.15f + (NextRand(runtime) % 85u) / 100f
+                    };
+                }
+            }
+
+            float dt = runtime.LastDtSeconds;
+            float speed = (0.35f + runtime.EnergyLevel * 1.4f + runtime.BeatPulseLevel * 2.1f) * dt;
+            float cx = width * 0.5f;
+            float cy = height * 0.5f;
+            float proj = Math.Min(width, height) * 0.45f;
+
+            for (int i = 0; i < starCount; i++)
+            {
+                ref var st = ref runtime.Stars[i];
+                float prevZ = st.Z;
+                st.Z -= speed;
+                if (st.Z <= 0.06f)
+                {
+                    st.X = ((NextRand(runtime) % 200u) / 100f) - 1f;
+                    st.Y = ((NextRand(runtime) % 200u) / 100f) - 1f;
+                    st.Z = 1.0f;
+                    continue;
+                }
+
+                int x0 = (int)MathF.Round(cx + (st.X / prevZ) * proj);
+                int y0 = (int)MathF.Round(cy + (st.Y / prevZ) * proj);
+                int x1 = (int)MathF.Round(cx + (st.X / st.Z) * proj);
+                int y1 = (int)MathF.Round(cy + (st.Y / st.Z) * proj);
+
+                if (x1 < 0 || x1 >= width || y1 < 0 || y1 >= height)
+                {
+                    st.X = ((NextRand(runtime) % 200u) / 100f) - 1f;
+                    st.Y = ((NextRand(runtime) % 200u) / 100f) - 1f;
+                    st.Z = 1.0f;
+                    continue;
+                }
+
+                float brightness = Math.Clamp(1f - st.Z, 0.1f, 1f);
+                byte colorIdx = brightness > 0.78f ? IdxWhite : GradientIndexForNormalized(brightness, height);
+                DrawThickLine(raw, width, height, x0, y0, x1, y1, 0, colorIdx);
+            }
+        }
+
+        private static void ApplyFloorReflection(byte[] raw, int width, int height, int activeHeight)
+        {
+            int stride = width + 1;
+            int reflHeight = height - activeHeight;
+            for (int r = 0; r < reflHeight; r++)
+            {
+                int srcY = Math.Max(0, activeHeight - 1 - r);
+                int dstY = activeHeight + r;
+                float fade = 1f - (r / (float)Math.Max(1, reflHeight));
+                byte dimIdx = (byte)(IdxPulseBase + Math.Clamp((int)MathF.Round(fade * 4f), 1, 4));
+                int srcOff = srcY * stride + 1;
+                int dstOff = dstY * stride + 1;
+                for (int x = 0; x < width; x++)
+                {
+                    byte px = raw[srcOff + x];
+                    if (px != IdxBg && px < IdxPulseBase)
+                    {
+                        raw[dstOff + x] = dimIdx;
+                    }
+                }
+            }
+        }
+
+        private static void RenderPeakSparks(byte[] raw, int width, int height, SparkParticle[] sparks)
+        {
+            int stride = width + 1;
+            for (int i = 0; i < sparks.Length; i++)
+            {
+                ref readonly var sp = ref sparks[i];
+                if (sp.Life <= 0f) continue;
+                int px = Math.Clamp((int)MathF.Round(sp.X * (width - 1)), 0, width - 1);
+                int py = Math.Clamp((int)MathF.Round(sp.Y * (height - 1)), 0, height - 1);
+                byte colorIdx = sp.Life > 0.55f ? IdxWhite : GradientIndexForNormalized(sp.Life, height);
+                raw[py * stride + 1 + px] = colorIdx;
+                if (px + 1 < width && sp.Life > 0.4f) raw[py * stride + 1 + px + 1] = colorIdx;
+            }
+        }
+
+        private static void ApplyEnergyTint(byte[] raw, int width, int height, float energyLevel)
+        {
+            int maxGrad = Math.Min(height, 236);
+            int shift = (int)MathF.Round((0.45f - Math.Clamp(energyLevel, 0f, 1f)) * (maxGrad * 0.35f));
+            if (shift == 0) return;
+
+            int stride = width + 1;
+            for (int y = 0; y < height; y++)
+            {
+                int off = y * stride + 1;
+                for (int x = 0; x < width; x++)
+                {
+                    byte px = raw[off + x];
+                    if (px >= 1 && px <= maxGrad)
+                    {
+                        raw[off + x] = (byte)Math.Clamp(px + shift, 1, maxGrad);
+                    }
+                }
+            }
+        }
+
+        private static void ApplyScanlines(byte[] raw, int width, int height)
+        {
+            int stride = width + 1;
+            for (int y = 1; y < height; y += 2)
+            {
+                int off = y * stride + 1;
+                for (int x = 0; x < width; x++)
+                {
+                    byte px = raw[off + x];
+                    if (px == IdxBg)
+                    {
+                        raw[off + x] = IdxDimScanline;
+                    }
+                    else if (px >= 1 && px < IdxDimScanline)
+                    {
+                        raw[off + x] = IdxDimScanline;
+                    }
+                }
+            }
+        }
+
+        private static void RenderBpmOverlayIndexed(byte[] raw, int width, int height, int bpm)
+        {
+            Span<char> chars = stackalloc char[4];
+            int len = 0;
+            if (bpm >= 40 && bpm <= 240)
+            {
+                if (bpm >= 100) chars[len++] = (char)('0' + (bpm / 100));
+                chars[len++] = (char)('0' + ((bpm / 10) % 10));
+                chars[len++] = (char)('0' + (bpm % 10));
+            }
+            else
+            {
+                chars[len++] = '-';
+                chars[len++] = '-';
+            }
+
+            int textW = len * 6 - 1;
+            int boxW = Math.Min(width - 2, textW + 4);
+            int boxH = Math.Min(height - 2, 11);
+            int startX = Math.Max(2, width - 2 - boxW);
+            int stride = width + 1;
+
+            for (int y = 2; y < 2 + boxH; y++)
+            {
+                raw.AsSpan(y * stride + 1 + startX, boxW).Fill(IdxOverlayBg);
+            }
+
+            int x = startX + 2;
+            for (int i = 0; i < len; i++)
+            {
+                DrawChar5x7(raw, width, height, x, 4, chars[i], IdxWhite);
+                x += 6;
+            }
+        }
+
+        private static void RenderClipLed(byte[] raw, int width, int height)
+        {
+            int size = Math.Max(4, width / 16);
+            int x0 = Math.Max(0, width - size - 3);
+            int y0 = Math.Max(0, height - size - 3);
+            int stride = width + 1;
+            for (int y = y0; y < Math.Min(height, y0 + size); y++)
+            {
+                raw.AsSpan(y * stride + 1 + x0, Math.Min(size, width - x0)).Fill(IdxClipRed);
             }
         }
 

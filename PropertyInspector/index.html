@@ -307,7 +307,21 @@
         </div>
         <div class="grid">
           <div class="hint-box">
-            Wskazówka: krótkie kliknięcie = Pause/Resume, długie (≥ 0.6 s) = akcja Long Press.
+            Wskazówka: skonfiguruj osobne akcje pod krótkie i długie przytrzymanie przycisku.
+          </div>
+          <div class="row">
+            <div class="label-wrap">
+              <span class="label">Short Press</span>
+              <span class="help-icon" data-help="Akcja wykonywana po krótkim kliknięciu przycisku (< 0.6 s).">?</span>
+            </div>
+            <div class="control">
+              <select id="shortPressAction">
+                <option value="togglePause">Pause / Resume</option>
+                <option value="cycleRenderMode">Zmień tryb renderu</option>
+                <option value="cycleGradientPreset">Zmień preset kolorów</option>
+                <option value="none">Wyłączone</option>
+              </select>
+            </div>
           </div>
           <div class="row">
             <div class="label-wrap">
@@ -458,6 +472,11 @@
             <div class="pill" data-mode="area">Area</div>
             <div class="pill" data-mode="radial">Radial</div>
             <div class="pill" data-mode="waterfall">Water</div>
+            <div class="pill" data-mode="matrix">Matrix</div>
+            <div class="pill" data-mode="fire">Fire</div>
+            <div class="pill" data-mode="ekg">EKG</div>
+            <div class="pill" data-mode="vectorscope">Scope</div>
+            <div class="pill" data-mode="starfield">Stars</div>
           </div>
 
           <div class="row">
@@ -572,6 +591,48 @@
               <span class="help-icon" data-help="Pokazuje subtelną ikonę pauzy (||) lub ciszy, gdy wskaźnik jest zatrzymany.">?</span>
             </span>
             <span><input id="idleIconEnabled" type="checkbox"></span>
+          </div>
+          <div class="inline-check">
+            <span class="label-wrap" style="width:auto">
+              <span class="label">Licznik BPM</span>
+              <span class="help-icon" data-help="Szacuje tempo utworu na żywo z uderzeń basu i pokazuje w prawym górnym rogu.">?</span>
+            </span>
+            <span><input id="showBpmOverlay" type="checkbox"></span>
+          </div>
+          <div class="inline-check">
+            <span class="label-wrap" style="width:auto">
+              <span class="label">Odbicie lustrzane (Floor)</span>
+              <span class="help-icon" data-help="Dodaje przyciemnione odbicie lustrzane w dolnych 24% kafelka (dla Bars, LED, Dots, Area, Stereo).">?</span>
+            </span>
+            <span><input id="floorReflectionEnabled" type="checkbox"></span>
+          </div>
+          <div class="inline-check">
+            <span class="label-wrap" style="width:auto">
+              <span class="label">Iskry (Peak Sparks)</span>
+              <span class="help-icon" data-help="Od szczytów mocno uderzających słupków odrywają się drobne iskry ulatujące w górę.">?</span>
+            </span>
+            <span><input id="peakSparksEnabled" type="checkbox"></span>
+          </div>
+          <div class="inline-check">
+            <span class="label-wrap" style="width:auto">
+              <span class="label">Energia koloru (Tint)</span>
+              <span class="help-icon" data-help="Dynamicznie przesuwa jasność/odcień gradientu w zależności od energii utworu.">?</span>
+            </span>
+            <span><input id="energyTintEnabled" type="checkbox"></span>
+          </div>
+          <div class="inline-check">
+            <span class="label-wrap" style="width:auto">
+              <span class="label">Filtr CRT / Scanlines</span>
+              <span class="help-icon" data-help="Delikatnie przyciemnia co drugą linię poziomą, dając retro efekt wyświetlacza VFD/CRT.">?</span>
+            </span>
+            <span><input id="scanlinesEnabled" type="checkbox"></span>
+          </div>
+          <div class="inline-check">
+            <span class="label-wrap" style="width:auto">
+              <span class="label">Dioda przesteru (Clip LED)</span>
+              <span class="help-icon" data-help="Mruga na czerwono w prawym dolnym rogu, gdy sygnał audio dobija do 0 dBFS.">?</span>
+            </span>
+            <span><input id="clipLedEnabled" type="checkbox"></span>
           </div>
         </div>
       </div>

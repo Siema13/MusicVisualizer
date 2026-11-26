@@ -647,6 +647,8 @@ namespace MusicVisualizerLoopback
                             {
                                 dst.RenderMode = src.RenderMode;
                                 dst.Orientation = src.Orientation;
+                                dst.ShortPressAction = src.ShortPressAction;
+                                dst.LongPressAction = src.LongPressAction;
                                 dst.AutoGainEnabled = src.AutoGainEnabled;
                                 dst.BgColor = src.BgColor;
                                 dst.GradientStops = src.GradientStops.Select(g => g.Clone()).ToList();
@@ -656,8 +658,14 @@ namespace MusicVisualizerLoopback
                                 dst.PeakThickness = src.PeakThickness;
                                 dst.DotSpacing = src.DotSpacing;
                                 dst.ShowNumericMeter = src.ShowNumericMeter;
+                                dst.ShowBpmOverlay = src.ShowBpmOverlay;
                                 dst.BeatPulseEnabled = src.BeatPulseEnabled;
                                 dst.IdleIconEnabled = src.IdleIconEnabled;
+                                dst.FloorReflectionEnabled = src.FloorReflectionEnabled;
+                                dst.PeakSparksEnabled = src.PeakSparksEnabled;
+                                dst.EnergyTintEnabled = src.EnergyTintEnabled;
+                                dst.ScanlinesEnabled = src.ScanlinesEnabled;
+                                dst.ClipLedEnabled = src.ClipLedEnabled;
                                 dst.AttackSpeed = src.AttackSpeed;
                                 dst.ReleaseSpeed = src.ReleaseSpeed;
                                 dst.Smoothing = src.Smoothing;
@@ -722,52 +730,43 @@ namespace MusicVisualizerLoopback
 
             var updatedTargets = new List<(ActionRuntime Target, VisualizerSettings Saved)>();
             var currentSnap = runtime.GetSettingsSnapshot();
+            bool isLongPress = elapsedMs >= LongPressThresholdMs;
+            string pressAction = isLongPress ? currentSnap.LongPressAction : currentSnap.ShortPressAction;
+            bool syncMultiKey = currentSnap.SpanCount > 1 && (pressAction == "cycleRenderMode" || pressAction == "cycleGradientPreset" || (isLongPress && pressAction == "togglePause"));
+            var targets = syncMultiKey
+                ? _actions.Values.Where(a => a.GetSettingsSnapshot().SpanCount > 1).ToArray()
+                : new[] { runtime };
 
-            if (elapsedMs >= LongPressThresholdMs)
+            if (pressAction == "cycleRenderMode")
             {
-                string longAction = currentSnap.LongPressAction;
-                bool syncMultiKey = currentSnap.SpanCount > 1;
-                var targets = syncMultiKey
-                    ? _actions.Values.Where(a => a.GetSettingsSnapshot().SpanCount > 1).ToArray()
-                    : new[] { runtime };
-
-                if (longAction == "cycleRenderMode")
+                string nextMode = BuiltInPresets.NextRenderMode(currentSnap.RenderMode);
+                foreach (var target in targets)
                 {
-                    string nextMode = BuiltInPresets.NextRenderMode(currentSnap.RenderMode);
-                    foreach (var target in targets)
-                    {
-                        var saved = target.QueueLongPressTransform(s => s.RenderMode = nextMode);
-                        updatedTargets.Add((target, saved));
-                    }
-                }
-                else if (longAction == "cycleGradientPreset")
-                {
-                    var nextStops = BuiltInPresets.NextGradientPreset(currentSnap.GradientStops);
-                    foreach (var target in targets)
-                    {
-                        var saved = target.QueueLongPressTransform(s =>
-                        {
-                            s.GradientStops = nextStops.Select(g => g.Clone()).ToList();
-                        });
-                        updatedTargets.Add((target, saved));
-                    }
-                }
-                else if (longAction == "togglePause")
-                {
-                    bool nextPaused = !currentSnap.Paused;
-                    foreach (var target in targets)
-                    {
-                        var saved = target.QueueManualPause(nextPaused);
-                        target.ManualPauseOverride = true;
-                        updatedTargets.Add((target, saved));
-                    }
+                    var saved = target.QueueLongPressTransform(s => s.RenderMode = nextMode);
+                    updatedTargets.Add((target, saved));
                 }
             }
-            else
+            else if (pressAction == "cycleGradientPreset")
             {
-                var saved = runtime.QueueManualPauseToggle();
-                runtime.ManualPauseOverride = true;
-                updatedTargets.Add((runtime, saved));
+                var nextStops = BuiltInPresets.NextGradientPreset(currentSnap.GradientStops);
+                foreach (var target in targets)
+                {
+                    var saved = target.QueueLongPressTransform(s =>
+                    {
+                        s.GradientStops = nextStops.Select(g => g.Clone()).ToList();
+                    });
+                    updatedTargets.Add((target, saved));
+                }
+            }
+            else if (pressAction == "togglePause")
+            {
+                bool nextPaused = !currentSnap.Paused;
+                foreach (var target in targets)
+                {
+                    var saved = target.QueueManualPause(nextPaused);
+                    target.ManualPauseOverride = true;
+                    updatedTargets.Add((target, saved));
+                }
             }
 
             if (updatedTargets.Count > 0)
@@ -1094,6 +1093,7 @@ namespace MusicVisualizerLoopback
                 ? Math.Clamp((nowTicks - runtime.LastAnimTicks) / (double)Stopwatch.Frequency, 0.005, 0.100)
                 : (1.0 / TargetKeyFps);
             runtime.LastAnimTicks = nowTicks;
+            runtime.LastDtSeconds = (float)dtSeconds;
 
             var settings = runtime.Settings;
             int barCount = Math.Clamp(settings.BarCount, 2, 32);
@@ -1256,6 +1256,127 @@ namespace MusicVisualizerLoopback
             {
                 runtime.WaterfallTick++;
                 anyActive = true;
+            }
+
+            // Update BPM & Clip LED hold timer
+            runtime.EstimatedBpm = snapshot.EstimatedBpm;
+            if (snapshot.PeakAbs >= 0.992f)
+            {
+                runtime.ClipHoldSeconds = 0.25f;
+            }
+            else if (runtime.ClipHoldSeconds > 0f)
+            {
+                runtime.ClipHoldSeconds = Math.Max(0f, runtime.ClipHoldSeconds - (float)dtSeconds);
+            }
+
+            // Smooth overall energy level for EnergyTint, Matrix, Starfield
+            float currentMean = barCount > 0 ? levelSum / barCount : 0f;
+            runtime.EnergyLevel += (currentMean - runtime.EnergyLevel) * (1f - MathF.Pow(1f - 0.25f, stepRatio));
+
+            // Update Vectorscope L/R waveform buffers when active
+            if (settings.RenderMode == "vectorscope")
+            {
+                int wLen = Math.Min(runtime.WaveformLeft.Length, snapshot.WaveformLeft.Length);
+                Array.Copy(snapshot.WaveformLeft, runtime.WaveformLeft, wLen);
+                Array.Copy(snapshot.WaveformRight, runtime.WaveformRight, wLen);
+                if (snapshot.HasSignal)
+                {
+                    runtime.DynamicFrameTick++;
+                    anyActive = true;
+                }
+            }
+
+            // Update EKG rolling history (with sharp QRS pulse on bass transient)
+            if (settings.RenderMode == "ekg")
+            {
+                if (runtime.EkgHistory == null || runtime.EkgHistory.Length != 128)
+                {
+                    runtime.EkgHistory = new float[128];
+                }
+
+                var ekg = runtime.EkgHistory;
+                Array.Copy(ekg, 2, ekg, 0, ekg.Length - 2);
+                float rawBass = MapLinearLevelToNorm(snapshot.BassEnergy, settings.GainDb, settings.NoiseGateDb, minDb, invDbRange, settings.Gamma);
+                runtime.BeatBassBaseline += (rawBass - runtime.BeatBassBaseline) * (1f - MathF.Pow(1f - 0.08f, stepRatio));
+                if (runtime.EkgPulseCountdown <= 0 && rawBass > 0.22f && rawBass > runtime.BeatBassBaseline * 1.25f)
+                {
+                    runtime.EkgPulseCountdown = 5;
+                }
+
+                float s0 = 0f, s1 = 0f;
+                if (runtime.EkgPulseCountdown > 0)
+                {
+                    float amp = Math.Clamp(0.45f + rawBass * 0.55f, 0.4f, 1.0f);
+                    switch (runtime.EkgPulseCountdown)
+                    {
+                        case 5: s0 = -0.18f * amp; s1 = 0.25f * amp; break;
+                        case 4: s0 = 0.95f * amp; s1 = -0.45f * amp; break;
+                        case 3: s0 = 0.15f * amp; s1 = 0.22f * amp; break;
+                        case 2: s0 = 0.10f * amp; s1 = 0.0f; break;
+                        default: s0 = 0f; s1 = 0f; break;
+                    }
+                    runtime.EkgPulseCountdown--;
+                }
+                ekg[^2] = s0;
+                ekg[^1] = s1;
+                if (snapshot.HasSignal || runtime.EkgPulseCountdown > 0)
+                {
+                    runtime.DynamicFrameTick++;
+                    anyActive = true;
+                }
+            }
+
+            // Update procedural modes (Matrix, Fire, Starfield)
+            if ((settings.RenderMode == "matrix" || settings.RenderMode == "fire" || settings.RenderMode == "starfield") &&
+                (anyActive || snapshot.HasSignal))
+            {
+                runtime.DynamicFrameTick++;
+                anyActive = true;
+            }
+
+            // Update Peak Sparks particles
+            if (settings.PeakSparksEnabled)
+            {
+                if (runtime.Sparks == null)
+                {
+                    runtime.Sparks = new SparkParticle[32];
+                }
+
+                float dt = (float)dtSeconds;
+                bool anySparkAlive = false;
+                for (int i = 0; i < runtime.Sparks.Length; i++)
+                {
+                    ref var sp = ref runtime.Sparks[i];
+                    if (sp.Life <= 0f) continue;
+                    sp.Y -= sp.Vy * dt;
+                    sp.Vy = Math.Max(0.05f, sp.Vy - 0.55f * dt);
+                    sp.Life -= 1.8f * dt;
+                    if (sp.Life > 0f && sp.Y >= 0f) anySparkAlive = true;
+                    else sp.Life = 0f;
+                }
+
+                for (int i = 0; i < barCount; i++)
+                {
+                    if (runtime.Bars[i] > 0.45f && runtime.MappedScratch[i] - runtime.Bars[i] > 0.05f)
+                    {
+                        int idx = runtime.SparkWriteIndex % runtime.Sparks.Length;
+                        runtime.SparkWriteIndex = idx + 1;
+                        runtime.Sparks[idx] = new SparkParticle
+                        {
+                            X = (i + 0.5f) / barCount,
+                            Y = Math.Clamp(1f - runtime.Bars[i], 0.05f, 0.95f),
+                            Vy = 0.35f + runtime.Bars[i] * 0.45f,
+                            Life = 1.0f
+                        };
+                        anySparkAlive = true;
+                    }
+                }
+
+                if (anySparkAlive)
+                {
+                    runtime.DynamicFrameTick++;
+                    anyActive = true;
+                }
             }
 
             if (settings.RenderMode == "stereo" && (runtime.StereoLeft > 0f || runtime.StereoRight > 0f || runtime.StereoPeakLeft > 0f || runtime.StereoPeakRight > 0f))
