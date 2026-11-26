@@ -419,6 +419,21 @@
               </div>
             </div>
           </div>
+          <div id="spanRangeControls" class="grid hidden">
+            <div class="row">
+              <div class="label-wrap"><span class="label">Zakres od</span></div>
+              <div class="control"><input id="spanMinSlider" type="range" min="20" max="500" step="10" value="50"></div>
+              <div id="spanMinVal" class="value">50 Hz</div>
+            </div>
+            <div class="row">
+              <div class="label-wrap"><span class="label">Zakres do</span></div>
+              <div class="control"><input id="spanMaxSlider" type="range" min="2000" max="20000" step="250" value="12000"></div>
+              <div id="spanMaxVal" class="value">12.0k</div>
+            </div>
+            <div class="toolbar">
+              <button id="spanAutoBtn" type="button" class="btn btn-small">Auto muzyczny (50 Hz – 12 kHz)</button>
+            </div>
+          </div>
           <div id="spanRangeHint" class="hint-box hidden"></div>
         </div>
       </div>

@@ -226,6 +226,8 @@ function loadUiFromSettings(s) {
   setSelectValue("spanCount", String(s.spanCount));
   updateSpanIndexOptions(s.spanCount, s.spanIndex);
   toggleVisibility("spanIndexRow", s.spanCount > 1);
+  toggleVisibility("spanRangeControls", s.spanCount > 1);
+  syncSpanSlidersFromFreq(s.freqMin, s.freqMax);
 
   setRange("barCount", "barCountVal", s.barCount, 0, "");
   setRange("gainDb", "gainDbVal", s.gainDb, 0, " dB", true);
@@ -358,6 +360,19 @@ function setFreqPresetUi(preset, customMin, customMax) {
   }
 }
 
+function syncSpanSlidersFromFreq(freqMin, freqMax) {
+  const minEl = document.getElementById("spanMinSlider");
+  const minVal = document.getElementById("spanMinVal");
+  const maxEl = document.getElementById("spanMaxSlider");
+  const maxVal = document.getElementById("spanMaxVal");
+  const clampedMin = clampInt(freqMin, 20, 500, 50);
+  const clampedMax = clampInt(freqMax, 2000, 20000, 12000);
+  if (minEl) minEl.value = String(clampedMin);
+  if (minVal) minVal.textContent = clampedMin + " Hz";
+  if (maxEl) maxEl.value = String(clampedMax);
+  if (maxVal) maxVal.textContent = (clampedMax / 1000).toFixed(1) + "k";
+}
+
 function updateSpanRangeHint(s) {
   const hint = document.getElementById("spanRangeHint");
   if (!hint) return;
@@ -367,14 +382,14 @@ function updateSpanRangeHint(s) {
     hint.classList.add("hidden");
     return;
   }
-  const minHz = Math.max(20, s.freqMin || 20);
-  const maxHz = Math.max(minHz + 1, s.freqMax || 20000);
+  const minHz = Math.max(20, s.freqMin || 50);
+  const maxHz = Math.max(minHz + 1, s.freqMax || 12000);
   const logMin = Math.log10(minHz);
   const logSpan = Math.log10(maxHz) - logMin;
   const sliceMin = Math.round(Math.pow(10, logMin + ((idx - 1) / count) * logSpan));
   const sliceMax = Math.round(Math.pow(10, logMin + (idx / count) * logSpan));
   const fmt = (hz) => hz >= 1000 ? (hz / 1000).toFixed(1) + " kHz" : hz + " Hz";
-  hint.textContent = "Ten kafelek (" + idx + "/" + count + "): " + fmt(sliceMin) + " – " + fmt(sliceMax) + ". Ustaw ten sam zakres (np. Full) na wszystkich " + count + " przyciskach i wybierz kolejne pozycje 1/" + count + " … " + count + "/" + count + ".";
+  hint.textContent = "Ten kafelek (" + idx + "/" + count + "): " + fmt(sliceMin) + " – " + fmt(sliceMax) + " (z zakresu " + fmt(minHz) + " – " + fmt(maxHz) + ").";
   hint.classList.remove("hidden");
 }
 
@@ -952,8 +967,55 @@ function initUi() {
     const currentIdx = clampInt(getValue("spanIndex", "1"), 1, count, 1);
     updateSpanIndexOptions(count, currentIdx);
     toggleVisibility("spanIndexRow", count > 1);
+    toggleVisibility("spanRangeControls", count > 1);
+
+    // Auto-select musical 50 Hz - 12 kHz range when enabling Multi-Key from raw 20-20k
+    if (count > 1) {
+      const curMin = parseInt(getValue("freqMin", "20"), 10);
+      const curMax = parseInt(getValue("freqMax", "20000"), 10);
+      if (curMin <= 20 && curMax >= 20000) {
+        setFreqPresetUi("custom", 50, 12000);
+        syncSpanSlidersFromFreq(50, 12000);
+      } else {
+        syncSpanSlidersFromFreq(curMin, curMax);
+      }
+    }
     previewSettings();
   });
+
+  const spanMinSlider = document.getElementById("spanMinSlider");
+  if (spanMinSlider) {
+    spanMinSlider.addEventListener("input", (e) => {
+      const val = clampInt(e.target.value, 20, 500, 50);
+      const curMax = clampInt(getValue("spanMaxSlider", "12000"), 2000, 20000, 12000);
+      setFreqPresetUi("custom", val, curMax);
+      syncSpanSlidersFromFreq(val, curMax);
+      previewSettings();
+    });
+    spanMinSlider.addEventListener("change", () => saveSettings());
+  }
+
+  const spanMaxSlider = document.getElementById("spanMaxSlider");
+  if (spanMaxSlider) {
+    spanMaxSlider.addEventListener("input", (e) => {
+      const curMin = clampInt(getValue("spanMinSlider", "50"), 20, 500, 50);
+      const val = clampInt(e.target.value, 2000, 20000, 12000);
+      setFreqPresetUi("custom", curMin, val);
+      syncSpanSlidersFromFreq(curMin, val);
+      previewSettings();
+    });
+    spanMaxSlider.addEventListener("change", () => saveSettings());
+  }
+
+  const spanAutoBtn = document.getElementById("spanAutoBtn");
+  if (spanAutoBtn) {
+    spanAutoBtn.addEventListener("click", () => {
+      setFreqPresetUi("custom", 50, 12000);
+      syncSpanSlidersFromFreq(50, 12000);
+      saveSettings();
+      previewSettings();
+    });
+  }
 
   bindSimpleChange("ledSegmentMode", () => {
     const mode = getValue("ledSegmentMode", "fixedCount");

@@ -175,9 +175,8 @@ namespace MusicVisualizerLoopback
             double fullLogMin = Math.Log10(minHz);
             double fullLogSpan = Math.Log10(maxHz) - fullLogMin;
 
-            // Multi-Key Span: divide the logarithmic spectrum evenly across SpanCount keys
-            double sliceLogMin = fullLogMin + ((spanIndex - 1) / (double)spanCount) * fullLogSpan;
-            double sliceLogSpan = fullLogSpan / spanCount;
+            int totalBars = barCount * spanCount;
+            int barOffset = (spanIndex - 1) * barCount;
 
             int rangeStartBin = Math.Max(1, (int)Math.Floor((minHz / nyquist) * binCount));
             int rangeEndBin = Math.Min(binCount - 1, (int)Math.Ceiling((maxHz / nyquist) * binCount));
@@ -191,11 +190,11 @@ namespace MusicVisualizerLoopback
 
             for (int i = 0; i < barCount; i++)
             {
-                double startRatio = i / (double)barCount;
-                double endRatio = (i + 1) / (double)barCount;
+                double startRatio = (barOffset + i) / (double)totalBars;
+                double endRatio = (barOffset + i + 1) / (double)totalBars;
 
-                double bandStartHz = Math.Pow(10.0, sliceLogMin + startRatio * sliceLogSpan);
-                double bandEndHz = Math.Pow(10.0, sliceLogMin + endRatio * sliceLogSpan);
+                double bandStartHz = Math.Pow(10.0, fullLogMin + startRatio * fullLogSpan);
+                double bandEndHz = Math.Pow(10.0, fullLogMin + endRatio * fullLogSpan);
                 double centerHz = Math.Sqrt(bandStartHz * bandEndHz);
 
                 double exactStartBin = (bandStartHz / nyquist) * binCount;
