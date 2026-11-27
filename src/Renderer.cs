@@ -940,39 +940,43 @@ namespace MusicVisualizerLoopback
             float[] bars = runtime.Bars;
             int barCount = Math.Min(Math.Clamp(runtime.Settings.BarCount, 2, 32), bars.Length);
 
-            // Seed bottom row from spectrum bars
+            // Seed bottom row from spectrum bars (bitmask jitter, zero modulo division)
             int bottomRow = (height - 1) * width;
+            uint rng = NextRand(runtime);
             for (int x = 0; x < width; x++)
             {
                 float val = 0f;
                 if (barCount > 0)
                 {
-                    int bIdx = Math.Clamp((x * barCount) / width, 0, barCount - 1);
+                    int bIdx = (x * barCount) / width;
+                    if (bIdx >= barCount) bIdx = barCount - 1;
                     val = Math.Clamp(bars[bIdx], 0f, 1f);
                 }
                 int heat = (int)(val * 255f);
                 if (heat > 20)
                 {
-                    heat = Math.Min(255, heat + (int)(NextRand(runtime) % 35u));
+                    rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+                    heat = Math.Min(255, heat + (int)(rng & 31u));
                 }
                 fire[bottomRow + x] = (byte)heat;
             }
 
-            // Propagate fire upward with slight cooling & flicker
+            // Propagate fire upward with fast 2-tap smoothing & bitmask cooling
             for (int y = 0; y < height - 1; y++)
             {
                 int dstRow = y * width;
                 int srcRow = (y + 1) * width;
                 for (int x = 0; x < width; x++)
                 {
-                    int srcX = x + ((int)(NextRand(runtime) % 3u) - 1);
-                    if (srcX < 0) srcX = 0;
-                    else if (srcX >= width) srcX = width - 1;
-                    int decay = (int)(NextRand(runtime) % 6u) + 2;
-                    int nextHeat = fire[srcRow + srcX] - decay;
+                    rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+                    int rightX = x + 1 < width ? x + 1 : x;
+                    int avg = (fire[srcRow + x] + fire[srcRow + rightX]) >> 1;
+                    int decay = (int)(rng & 7u) + 2;
+                    int nextHeat = avg - decay;
                     fire[dstRow + x] = nextHeat > 0 ? (byte)nextHeat : (byte)0;
                 }
             }
+            runtime.RngState = rng == 0 ? 0x13579BDFu : rng;
 
             int stride = width + 1;
             for (int y = 0; y < height; y++)
@@ -1213,11 +1217,7 @@ namespace MusicVisualizerLoopback
                 for (int x = 0; x < width; x++)
                 {
                     byte px = raw[off + x];
-                    if (px == IdxBg)
-                    {
-                        raw[off + x] = IdxDimScanline;
-                    }
-                    else if (px >= 1 && px < IdxDimScanline)
+                    if (px >= 1 && px < IdxDimScanline)
                     {
                         raw[off + x] = IdxDimScanline;
                     }

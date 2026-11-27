@@ -350,10 +350,11 @@ namespace MusicVisualizerLoopback
         private async Task ReceiveLoopAsync(CancellationToken cancellationToken)
         {
             var buffer = new byte[64 * 1024];
+            using var ms = new MemoryStream(64 * 1024);
 
             while (!cancellationToken.IsCancellationRequested && _socket.State == WebSocketState.Open)
             {
-                using var ms = new MemoryStream();
+                ms.SetLength(0);
                 WebSocketReceiveResult result;
 
                 do
@@ -370,11 +371,9 @@ namespace MusicVisualizerLoopback
                 }
                 while (!result.EndOfMessage);
 
-                var json = Encoding.UTF8.GetString(ms.ToArray());
-
                 try
                 {
-                    using var doc = JsonDocument.Parse(json);
+                    using var doc = JsonDocument.Parse(ms.GetBuffer().AsMemory(0, (int)ms.Length));
                     await HandleIncomingEventAsync(doc.RootElement, cancellationToken);
                 }
                 catch (Exception ex)
@@ -1131,6 +1130,12 @@ namespace MusicVisualizerLoopback
                 runtime.StereoPeakLeft = settings.PeakHold ? Math.Max(0f, runtime.StereoPeakLeft - peakFallStep) : 0f;
                 runtime.StereoPeakRight = settings.PeakHold ? Math.Max(0f, runtime.StereoPeakRight - peakFallStep) : 0f;
                 runtime.BeatPulseLevel = Math.Max(0f, runtime.BeatPulseLevel - 0.15f * stepRatio);
+                runtime.EnergyLevel = Math.Max(0f, runtime.EnergyLevel - 0.15f * stepRatio);
+                runtime.ClipHoldSeconds = 0f;
+                if (runtime.Sparks != null)
+                {
+                    Array.Clear(runtime.Sparks, 0, runtime.Sparks.Length);
+                }
                 if (runtime.StereoLeft > 0.0005f || runtime.StereoRight > 0.0005f || runtime.StereoPeakLeft > 0.0005f || runtime.StereoPeakRight > 0.0005f || runtime.BeatPulseLevel > 0.0005f)
                 {
                     active = true;
@@ -1297,8 +1302,8 @@ namespace MusicVisualizerLoopback
                 var ekg = runtime.EkgHistory;
                 Array.Copy(ekg, 2, ekg, 0, ekg.Length - 2);
                 float rawBass = MapLinearLevelToNorm(snapshot.BassEnergy, settings.GainDb, settings.NoiseGateDb, minDb, invDbRange, settings.Gamma);
-                runtime.BeatBassBaseline += (rawBass - runtime.BeatBassBaseline) * (1f - MathF.Pow(1f - 0.08f, stepRatio));
-                if (runtime.EkgPulseCountdown <= 0 && rawBass > 0.22f && rawBass > runtime.BeatBassBaseline * 1.25f)
+                runtime.EkgBassBaseline += (rawBass - runtime.EkgBassBaseline) * (1f - MathF.Pow(1f - 0.08f, stepRatio));
+                if (runtime.EkgPulseCountdown <= 0 && rawBass > 0.22f && rawBass > runtime.EkgBassBaseline * 1.25f)
                 {
                     runtime.EkgPulseCountdown = 5;
                 }

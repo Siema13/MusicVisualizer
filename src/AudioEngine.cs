@@ -277,9 +277,9 @@ namespace MusicVisualizerLoopback
 
             for (int i = 0; i < binCount; i++)
             {
-                double re = _fftBuffer[i].X;
-                double im = _fftBuffer[i].Y;
-                float mag = (float)Math.Sqrt(re * re + im * im);
+                float re = _fftBuffer[i].X;
+                float im = _fftBuffer[i].Y;
+                float mag = MathF.Sqrt(re * re + im * im);
                 if (mag < 1e-6f)
                 {
                     mag = 0f;

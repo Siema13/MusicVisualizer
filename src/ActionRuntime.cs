@@ -63,6 +63,7 @@ namespace MusicVisualizerLoopback
         public float StereoPeakRight { get; set; }
         public float BeatPulseLevel { get; set; }
         public float BeatBassBaseline { get; set; }
+        public float EkgBassBaseline { get; set; }
         public double AgcOffsetDb { get; set; }
         public float EnergyLevel { get; set; }
         public float ClipHoldSeconds { get; set; }

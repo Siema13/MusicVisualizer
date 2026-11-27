@@ -1094,6 +1094,13 @@ function initUi() {
     sendToPlugin({ event: "setPaused", paused: settings.paused });
   });
 
+  const resetDefaultsBtn = document.getElementById("resetDefaultsBtn");
+  if (resetDefaultsBtn) {
+    resetDefaultsBtn.addEventListener("click", () => {
+      sendToPlugin({ event: "resetDefaults" });
+    });
+  }
+
   const exportBtn = document.getElementById("exportBtn");
   if (exportBtn) exportBtn.addEventListener("click", () => sendToPlugin({ event: "requestExport" }));
 
