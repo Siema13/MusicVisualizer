@@ -656,6 +656,9 @@ namespace MusicVisualizerLoopback
                                 dst.PeakFallSpeed = src.PeakFallSpeed;
                                 dst.PeakThickness = src.PeakThickness;
                                 dst.DotSpacing = src.DotSpacing;
+                                dst.WaveBrightness = src.WaveBrightness;
+                                dst.WaveContrast = src.WaveContrast;
+                                dst.WaveSaturation = src.WaveSaturation;
                                 dst.ShowNumericMeter = src.ShowNumericMeter;
                                 dst.ShowBpmOverlay = src.ShowBpmOverlay;
                                 dst.BeatPulseEnabled = src.BeatPulseEnabled;

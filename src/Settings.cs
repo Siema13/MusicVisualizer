@@ -170,6 +170,9 @@ namespace MusicVisualizerLoopback
             settings.ShortPressAction = NormalizePressAction(settings.ShortPressAction, "togglePause");
             settings.LongPressAction = NormalizePressAction(settings.LongPressAction, "cycleRenderMode");
             settings.DotSpacing = Math.Clamp(settings.DotSpacing, 2, 10);
+            settings.WaveBrightness = Math.Clamp(settings.WaveBrightness, 0.3, 2.0);
+            settings.WaveContrast = Math.Clamp(settings.WaveContrast, 0.5, 2.5);
+            settings.WaveSaturation = Math.Clamp(settings.WaveSaturation, 0.0, 2.0);
             settings.AutoPauseTimeoutSec = Math.Clamp(settings.AutoPauseTimeoutSec, 5, 120);
 
             settings.LedSegmentMode = settings.LedSegmentMode == "fixedSize" ? "fixedSize" : "fixedCount";
@@ -392,6 +395,15 @@ namespace MusicVisualizerLoopback
         [JsonPropertyName("dotSpacing")]
         public int DotSpacing { get; set; } = 3;
 
+        [JsonPropertyName("waveBrightness")]
+        public double WaveBrightness { get; set; } = 1.0;
+
+        [JsonPropertyName("waveContrast")]
+        public double WaveContrast { get; set; } = 1.0;
+
+        [JsonPropertyName("waveSaturation")]
+        public double WaveSaturation { get; set; } = 1.0;
+
         [JsonPropertyName("showNumericMeter")]
         public bool ShowNumericMeter { get; set; } = false;
 
@@ -489,6 +501,9 @@ namespace MusicVisualizerLoopback
                 ShortPressAction = ShortPressAction,
                 LongPressAction = LongPressAction,
                 DotSpacing = DotSpacing,
+                WaveBrightness = WaveBrightness,
+                WaveContrast = WaveContrast,
+                WaveSaturation = WaveSaturation,
                 ShowNumericMeter = ShowNumericMeter,
                 ShowBpmOverlay = ShowBpmOverlay,
                 BeatPulseEnabled = BeatPulseEnabled,

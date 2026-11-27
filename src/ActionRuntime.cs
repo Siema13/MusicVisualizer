@@ -255,6 +255,12 @@ namespace MusicVisualizerLoopback
             hash.Add(settings.PeakThickness);
             hash.Add(settings.TopRadius);
             hash.Add(settings.DotSpacing);
+            if (settings.RenderMode == "waveform")
+            {
+                hash.Add(settings.WaveBrightness);
+                hash.Add(settings.WaveContrast);
+                hash.Add(settings.WaveSaturation);
+            }
             hash.Add(settings.ShowNumericMeter);
             hash.Add(settings.ShowBpmOverlay);
             hash.Add(settings.BeatPulseEnabled);

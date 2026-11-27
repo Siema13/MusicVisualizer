@@ -235,12 +235,17 @@ namespace MusicVisualizerLoopback
             }
             else
             {
+                bool adjustWave = settings.RenderMode == "waveform";
                 int gradCount = Math.Min(height, 236);
                 float denom = Math.Max(1, gradCount - 1);
                 for (int y = 0; y < gradCount; y++)
                 {
                     float t = 1.0f - (y / denom);
                     Color rowColor = InterpolateColor(settings.GradientStops, t);
+                    if (adjustWave)
+                    {
+                        rowColor = AdjustColor(rowColor, settings.WaveBrightness, settings.WaveContrast, settings.WaveSaturation);
+                    }
                     WriteRgb(paletteRgb, 1 + y, rowColor);
                 }
             }
@@ -249,10 +254,13 @@ namespace MusicVisualizerLoopback
             WriteRgb(paletteRgb, IdxClipRed, Color.FromArgb(255, 255, 23, 68));
 
             // 8 smooth pulsing background levels (0% -> 46% blend toward accent)
+            Color pulseAccent = settings.RenderMode == "waveform"
+                ? AdjustColor(accent, settings.WaveBrightness, settings.WaveContrast, settings.WaveSaturation)
+                : accent;
             for (int p = 0; p < 8; p++)
             {
                 float blend = (p / 7f) * 0.46f;
-                WriteRgb(paletteRgb, IdxPulseBase + p, Blend(bg, accent, blend));
+                WriteRgb(paletteRgb, IdxPulseBase + p, Blend(bg, pulseAccent, blend));
             }
 
             WriteRgb(paletteRgb, IdxBlack, Color.Black);
@@ -1640,6 +1648,34 @@ namespace MusicVisualizerLoopback
             int g = (int)Math.Round(a.G + (b.G - a.G) * t);
             int bl = (int)Math.Round(a.B + (b.B - a.B) * t);
             return Color.FromArgb(255, r, g, bl);
+        }
+
+        private static Color AdjustColor(Color c, double brightness, double contrast, double saturation)
+        {
+            double r = c.R / 255.0;
+            double g = c.G / 255.0;
+            double b = c.B / 255.0;
+
+            // Saturation
+            double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            r = luma + (r - luma) * saturation;
+            g = luma + (g - luma) * saturation;
+            b = luma + (b - luma) * saturation;
+
+            // Contrast around 0.5 midpoint
+            r = 0.5 + (r - 0.5) * contrast;
+            g = 0.5 + (g - 0.5) * contrast;
+            b = 0.5 + (b - 0.5) * contrast;
+
+            // Brightness
+            r *= brightness;
+            g *= brightness;
+            b *= brightness;
+
+            int ir = Math.Clamp((int)Math.Round(r * 255.0), 0, 255);
+            int ig = Math.Clamp((int)Math.Round(g * 255.0), 0, 255);
+            int ib = Math.Clamp((int)Math.Round(b * 255.0), 0, 255);
+            return Color.FromArgb(255, ir, ig, ib);
         }
     }
 }

@@ -58,6 +58,9 @@ function defaults() {
     shortPressAction: "togglePause",
     longPressAction: "cycleRenderMode",
     dotSpacing: 3,
+    waveBrightness: 1.0,
+    waveContrast: 1.0,
+    waveSaturation: 1.0,
     showNumericMeter: false,
     showBpmOverlay: false,
     beatPulseEnabled: false,
@@ -215,6 +218,9 @@ function normalizeSettings(input) {
     s.longPressAction = "cycleRenderMode";
   }
   s.dotSpacing = clampInt(s.dotSpacing, 2, 10, 3);
+  s.waveBrightness = clampFloat(s.waveBrightness, 0.3, 2.0, 1.0);
+  s.waveContrast = clampFloat(s.waveContrast, 0.5, 2.5, 1.0);
+  s.waveSaturation = clampFloat(s.waveSaturation, 0.0, 2.0, 1.0);
   s.showNumericMeter = !!s.showNumericMeter;
   s.showBpmOverlay = !!s.showBpmOverlay;
   s.beatPulseEnabled = !!s.beatPulseEnabled;
@@ -279,6 +285,9 @@ function loadUiFromSettings(s) {
   setRange("topRadius", "topRadiusVal", s.topRadius, 0, "");
 
   setRange("dotSpacing", "dotSpacingVal", s.dotSpacing, 0, "");
+  setRange("waveBrightness", "waveBrightnessVal", s.waveBrightness, 2, "");
+  setRange("waveContrast", "waveContrastVal", s.waveContrast, 2, "");
+  setRange("waveSaturation", "waveSaturationVal", s.waveSaturation, 2, "");
   setRange("autoPauseTimeoutSec", "autoPauseTimeoutSecVal", s.autoPauseTimeoutSec, 0, "");
 
   setRange("ledSegmentCount", "ledSegmentCountVal", s.ledSegmentCount, 0, "");
@@ -312,6 +321,7 @@ function loadUiFromSettings(s) {
   setCheckbox("autoPauseEnabled", s.autoPauseEnabled);
 
   toggleVisibility("dotSpacingRow", s.renderMode === "dots");
+  toggleVisibility("waveSettingsSection", s.renderMode === "waveform");
   toggleVisibility("ledSegmentSection", s.renderMode === "ledSegments");
   toggleVisibility("autoPauseTimeoutRow", s.autoPauseEnabled);
 
@@ -483,6 +493,9 @@ function collectSettingsFromUi() {
     shortPressAction: getValue("shortPressAction", "togglePause"),
     longPressAction: getValue("longPressAction", "cycleRenderMode"),
     dotSpacing: parseInt(getValue("dotSpacing", "3"), 10),
+    waveBrightness: parseFloat(getValue("waveBrightness", "1.0")),
+    waveContrast: parseFloat(getValue("waveContrast", "1.0")),
+    waveSaturation: parseFloat(getValue("waveSaturation", "1.0")),
     showNumericMeter: !!document.getElementById("showNumericMeter")?.checked,
     showBpmOverlay: !!document.getElementById("showBpmOverlay")?.checked,
     beatPulseEnabled: !!document.getElementById("beatPulseEnabled")?.checked,
@@ -980,6 +993,7 @@ function initUi() {
       settings.renderMode = mode;
       setRenderModePillUi(mode);
       toggleVisibility("dotSpacingRow", mode === "dots");
+      toggleVisibility("waveSettingsSection", mode === "waveform");
       toggleVisibility("ledSegmentSection", mode === "ledSegments");
       if (mode === "ledSegments") renderLedPreview(settings);
       saveSettings();
@@ -1001,6 +1015,9 @@ function initUi() {
   bindRange("peakThickness", "peakThicknessVal", 0, "", false, previewSettings);
   bindRange("topRadius", "topRadiusVal", 0, "", false, previewSettings);
   bindRange("dotSpacing", "dotSpacingVal", 0, "", false, previewSettings);
+  bindRange("waveBrightness", "waveBrightnessVal", 2, "", false, previewSettings);
+  bindRange("waveContrast", "waveContrastVal", 2, "", false, previewSettings);
+  bindRange("waveSaturation", "waveSaturationVal", 2, "", false, previewSettings);
   bindRange("autoPauseTimeoutSec", "autoPauseTimeoutSecVal", 0, "", false, previewSettings);
 
   bindRange("ledSegmentCount", "ledSegmentCountVal", 0, "", false, previewSettings);
